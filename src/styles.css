@@ -196,6 +196,7 @@ body {
 .win-stats div { display: flex; flex-direction: column; gap: 2px; }
 .win-stats i { font-style: normal; font-size: 12px; color: #8d9abf; letter-spacing: 2px; }
 .win-stats b { font-size: 20px; color: #ffffff; font-variant-numeric: tabular-nums; }
+.win-tip { margin-top: 10px; font-size: 12px; letter-spacing: 1px; color: #6b7899; }
 
 .confetti { position: absolute; top: -14px; width: 9px; height: 14px; z-index: 41; border-radius: 2px; animation: confetti-fall 2.6s linear infinite; pointer-events: none; }
 .confetti.c0 { background: #ffd54a; }

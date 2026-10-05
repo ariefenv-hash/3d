@@ -58,4 +58,28 @@ export class Sfx {
   click() {
     this.tone(660, 0.05, 'square', 0.05);
   }
+  /** 弹射板：弹簧上扬 */
+  bumper() {
+    this.tone(240, 0.18, 'square', 0.1, 720);
+    this.tone(480, 0.12, 'sine', 0.08, 960, 0.04);
+  }
+  /** 进入反重力场：气场上扬 */
+  field() {
+    this.tone(300, 0.3, 'sine', 0.07, 900);
+  }
+  /** 压力板激活：双音确认 */
+  plate() {
+    this.tone(660, 0.09, 'triangle', 0.11);
+    this.tone(880, 0.14, 'triangle', 0.1, undefined, 0.09);
+  }
+  /** 闸门溶解：低鸣+闪灼 */
+  gate() {
+    this.tone(180, 0.42, 'sawtooth', 0.09, 50);
+    this.tone(720, 0.26, 'sine', 0.07, 1180, 0.06);
+  }
+  /** 检查信标：温暖琶音 */
+  checkpoint() {
+    this.tone(523, 0.1, 'sine', 0.1);
+    this.tone(784, 0.16, 'sine', 0.1, undefined, 0.09);
+  }
 }

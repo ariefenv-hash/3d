@@ -10,11 +10,13 @@ export interface Stats {
   rotations: number;
   stars: number;
   starsTotal: number;
+  deaths: number;
 }
 export interface WinInfo {
   rotations: number;
   time: number;
   stars: number;
+  deaths: number;
 }
 
 export interface GameCallbacks {
@@ -27,6 +29,7 @@ export interface GameCallbacks {
 const G_MAG = 26;
 const BALL_R = 0.42;
 const MAX_VEL = 11;
+const BOOST_VEL = 19;
 const AIR_DRAG = 0.05;
 const RESTITUTION = 0.16;
 const BOUNCE_MIN = 2.2;
@@ -35,12 +38,50 @@ const STAR_DIST = 1.1;
 const OOB_MARGIN = 6;
 const CAM_DIST = 8.6;
 const STEP = 1 / 120;
+const PLATE_DIST = 1.15;
+const BUMPER_DIST = 1.05;
+const CHECKPOINT_DIST = 1.5;
 
+interface GateState {
+  need: number;
+  opened: boolean;
+  animT: number;
+  mesh: THREE.Mesh;
+}
 interface PhysBox {
   min: THREE.Vector3;
   max: THREE.Vector3;
   hazard: boolean;
   mesh: THREE.Mesh;
+  gate?: GateState;
+}
+interface FieldZone {
+  min: THREE.Vector3;
+  max: THREE.Vector3;
+  dir: THREE.Vector3;
+  mesh: THREE.Mesh;
+}
+interface PlateFx {
+  pos: THREE.Vector3;
+  active: boolean;
+  mat: THREE.MeshStandardMaterial;
+}
+interface BumperFx {
+  pos: THREE.Vector3;
+  n: THREE.Vector3;
+  power: number;
+  cd: number;
+  disc: THREE.Mesh;
+}
+interface CheckpointFx {
+  pos: THREE.Vector3;
+  active: boolean;
+  mat: THREE.MeshStandardMaterial;
+}
+interface SavedCheckpoint {
+  pos: THREE.Vector3;
+  gBase: THREE.Vector3;
+  q: THREE.Quaternion;
 }
 interface StarFx {
   mesh: THREE.Mesh;
@@ -81,6 +122,16 @@ export class Game {
   private boundMin = V();
   private boundMax = V();
 
+  private fields: FieldZone[] = [];
+  private plates: PlateFx[] = [];
+  private bumpers: BumperFx[] = [];
+  private checkpoints: CheckpointFx[] = [];
+  private curField: FieldZone | null = null;
+  private checkpoint: SavedCheckpoint | null = null;
+  deaths = 0;
+  private boostT = 0;
+  private activePlates = 0;
+
   private ball = { pos: V(), vel: V() };
   private ballMesh!: THREE.Mesh;
   private ballLight!: THREE.PointLight;
@@ -116,6 +167,10 @@ export class Game {
   private geoStar = new THREE.OctahedronGeometry(0.32);
   private geoTorus = new THREE.TorusGeometry(1.05, 0.11, 12, 40);
   private geoDisc = new THREE.CircleGeometry(0.95, 32);
+  private geoPlate = new THREE.CylinderGeometry(0.55, 0.68, 0.14, 28);
+  private geoRing = new THREE.TorusGeometry(0.55, 0.075, 10, 32);
+  private geoCone = new THREE.ConeGeometry(0.3, 0.55, 16);
+  private geoBump = new THREE.CylinderGeometry(0.62, 0.75, 0.2, 28);
   private matSolid = new THREE.MeshStandardMaterial({ color: '#242c42', roughness: 0.85, metalness: 0.08 });
   private matHazard = new THREE.MeshStandardMaterial({ color: '#3a1220', emissive: '#ff2d55', emissiveIntensity: 0.9, roughness: 0.6 });
   private matEdge = new THREE.LineBasicMaterial({ color: '#3fc1ff', transparent: true, opacity: 0.4 });
@@ -124,6 +179,11 @@ export class Game {
   private matStarBase = new THREE.MeshStandardMaterial({ color: '#ffd54a', emissive: '#ffb300', emissiveIntensity: 0.85, roughness: 0.35, transparent: true });
   private matTorus = new THREE.MeshStandardMaterial({ color: '#8a5cff', emissive: '#7c4dff', emissiveIntensity: 0.9, roughness: 0.4 });
   private matDisc = new THREE.MeshBasicMaterial({ color: '#b39dff', transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false });
+  private matField = new THREE.MeshBasicMaterial({ color: '#3fc1ff', transparent: true, opacity: 0.09, depthWrite: false });
+  private matGate = new THREE.MeshStandardMaterial({ color: '#8a5cff', emissive: '#7c4dff', emissiveIntensity: 0.75, roughness: 0.4, transparent: true, opacity: 0.85 });
+  private matPlateOff = new THREE.MeshStandardMaterial({ color: '#4a5568', emissive: '#000000', emissiveIntensity: 0, roughness: 0.6 });
+  private matBumper = new THREE.MeshStandardMaterial({ color: '#0e3a52', emissive: '#3fc1ff', emissiveIntensity: 0.9, roughness: 0.35 });
+  private matCpOff = new THREE.MeshStandardMaterial({ color: '#4a5568', emissive: '#22303c', emissiveIntensity: 0.4, roughness: 0.5 });
 
   // 陀螺仪
   private gyroOn = false;
@@ -185,13 +245,33 @@ export class Game {
         rot: this.rotations,
         mode: this.mode,
         stars: this.starsGot,
+        deaths: this.deaths,
+        plates: this.activePlates,
         finished: this.finished,
         dead: this.dead,
         level: this.levelIdx,
       }),
       tip: (d: TipDir) => this.tip(d),
       yaw: (d: number) => this.yaw(d),
+      /** 只读探针：当前相机姿态下四个方向键对应的世界向量 */
+      dirs: () => {
+        const r = V(1, 0, 0).applyQuaternion(this.qTarget);
+        const f = V(0, 0, -1).applyQuaternion(this.qTarget);
+        return {
+          R: r.toArray(),
+          L: r.clone().negate().toArray(),
+          U: f.toArray(),
+          D: f.clone().negate().toArray(),
+        };
+      },
       win: () => this.forceWin(),
+      /** 测试用：直接进入指定关卡 */
+      goto: (i: number) => this.startLevel(i),
+      /** 测试用：直接传送球体（速度清零） */
+      warp: (x: number, y: number, z: number) => {
+        this.ball.pos.set(x, y, z);
+        this.ball.vel.set(0, 0, 0);
+      },
       gyroSet: (p: number, r: number) => {
         this.gyroP0 = 0;
         this.gyroR0 = 0;
@@ -238,11 +318,16 @@ export class Game {
     this.stars = [];
     this.portal = null;
     this.tweens = [];
+    this.fields = [];
+    this.plates = [];
+    this.bumpers = [];
+    this.checkpoints = [];
+    this.curField = null;
   }
 
   private isShared(mat: THREE.Material | THREE.Material[]): boolean {
     const m = Array.isArray(mat) ? mat[0] : mat;
-    return m === this.matSolid || m === this.matHazard || m === this.matTorus || m === this.matDisc;
+    return m === this.matSolid || m === this.matHazard || m === this.matTorus || m === this.matDisc || m === this.matField || m === this.matBumper || m === this.matPlateOff || m === this.matCpOff;
   }
 
   private buildLevel(i: number) {
@@ -267,6 +352,85 @@ export class Game {
         hazard: !!b.hazard,
         mesh,
       });
+    }
+
+    // 反重力场
+    if (lvl.fields) {
+      for (const f of lvl.fields) {
+        const mesh = new THREE.Mesh(this.geoBox, this.matField);
+        mesh.position.set(f.p[0], f.p[1], f.p[2]);
+        mesh.scale.set(f.s[0], f.s[1], f.s[2]);
+        const edges = new THREE.LineSegments(this.geoEdge, new THREE.LineBasicMaterial({ color: '#3fc1ff', transparent: true, opacity: 0.55 }));
+        mesh.add(edges);
+        group.add(mesh);
+        this.fields.push({
+          min: V(f.p[0] - f.s[0] / 2, f.p[1] - f.s[1] / 2, f.p[2] - f.s[2] / 2),
+          max: V(f.p[0] + f.s[0] / 2, f.p[1] + f.s[1] / 2, f.p[2] + f.s[2] / 2),
+          dir: V(...f.dir).normalize(),
+          mesh,
+        });
+      }
+    }
+
+    // 压力板
+    if (lvl.plates) {
+      for (const pl of lvl.plates) {
+        const mat = this.matPlateOff.clone();
+        const mesh = new THREE.Mesh(this.geoPlate, mat);
+        mesh.position.set(pl.p[0], pl.p[1], pl.p[2]);
+        const n = V(...(pl.n ?? [0, 1, 0])).normalize();
+        mesh.quaternion.setFromUnitVectors(V(0, 1, 0), n);
+        group.add(mesh);
+        this.plates.push({ pos: V(pl.p[0], pl.p[1], pl.p[2]), active: false, mat });
+      }
+    }
+
+    // 闸门
+    if (lvl.gates) {
+      for (const g of lvl.gates) {
+        const mesh = new THREE.Mesh(this.geoBox, this.matGate.clone());
+        mesh.position.set(g.p[0], g.p[1], g.p[2]);
+        mesh.scale.set(g.s[0], g.s[1], g.s[2]);
+        mesh.add(new THREE.LineSegments(this.geoEdge, new THREE.LineBasicMaterial({ color: '#c9b3ff', transparent: true, opacity: 0.8 })));
+        group.add(mesh);
+        const gate: GateState = { need: g.need ?? 1, opened: false, animT: 0, mesh };
+        this.solidMeshes.push(mesh);
+        this.boxes.push({
+          min: V(g.p[0] - g.s[0] / 2, g.p[1] - g.s[1] / 2, g.p[2] - g.s[2] / 2),
+          max: V(g.p[0] + g.s[0] / 2, g.p[1] + g.s[1] / 2, g.p[2] + g.s[2] / 2),
+          hazard: false,
+          mesh,
+          gate,
+        });
+      }
+    }
+
+    // 弹射板
+    if (lvl.bumpers) {
+      for (const bp of lvl.bumpers) {
+        const n = V(...bp.n).normalize();
+        const disc = new THREE.Mesh(this.geoBump, this.matBumper);
+        disc.position.set(bp.p[0], bp.p[1], bp.p[2]);
+        disc.quaternion.setFromUnitVectors(V(0, 1, 0), n);
+        const cone = new THREE.Mesh(this.geoCone, this.matBumper);
+        cone.position.copy(n.clone().multiplyScalar(0.55));
+        cone.quaternion.copy(disc.quaternion);
+        disc.add(cone);
+        group.add(disc);
+        this.bumpers.push({ pos: V(bp.p[0], bp.p[1], bp.p[2]), n, power: bp.power ?? 13.5, cd: 0, disc });
+      }
+    }
+
+    // 检查信标
+    if (lvl.checkpoints) {
+      for (const cp of lvl.checkpoints) {
+        const mat = this.matCpOff.clone();
+        const mesh = new THREE.Mesh(this.geoRing, mat);
+        mesh.position.set(cp.p[0], cp.p[1], cp.p[2]);
+        mesh.rotation.y = Math.PI / 2;
+        group.add(mesh);
+        this.checkpoints.push({ pos: V(cp.p[0], cp.p[1], cp.p[2]), active: false, mat });
+      }
     }
 
     for (const s of lvl.stars) {
@@ -310,6 +474,10 @@ export class Game {
     this.timerOn = false;
     this.finished = false;
     this.dead = false;
+    this.deaths = 0;
+    this.activePlates = 0;
+    this.checkpoint = null;
+    this.boostT = 0;
     this.prevContact = false;
     this.gBase.set(0, -1, 0);
     this.qTarget.identity();
@@ -341,11 +509,17 @@ export class Game {
     if (this.mode !== 'play' || !this.enabled || this.finished || this.dead) return;
     const R = V(1, 0, 0).applyQuaternion(this.qTarget);
     const F = V(0, 0, -1).applyQuaternion(this.qTarget);
-    if (d === 'R') this.gBase.copy(R);
-    else if (d === 'L') this.gBase.copy(R.negate());
-    else if (d === 'U') this.gBase.copy(F);
-    else this.gBase.copy(F.negate());
-    this.refitCamera();
+    let dir: THREE.Vector3;
+    if (d === 'R') dir = R;
+    else if (d === 'L') dir = R.negate();
+    else if (d === 'U') dir = F;
+    else dir = F.negate();
+    if (this.curField) {
+      // 场内重力被场接管，方向键暂不改变重力（仍计入转向数）
+    } else {
+      this.gBase.copy(dir);
+      this.refitCamera();
+    }
     this.rotations++;
     if (!this.timerOn) this.timerOn = true;
     this.sfx.rotate();
@@ -590,13 +764,16 @@ export class Game {
   private step(h: number) {
     const vel = this.ball.vel;
     vel.addScaledVector(this.gEff, h);
-    if (vel.length() > MAX_VEL) vel.setLength(MAX_VEL);
+    if (this.boostT > 0) this.boostT -= h;
+    const cap = this.boostT > 0 ? BOOST_VEL : MAX_VEL;
+    if (vel.length() > cap) vel.setLength(cap);
     vel.multiplyScalar(1 - Math.min(0.5, AIR_DRAG * h));
     this.ball.pos.addScaledVector(vel, h);
 
     let contact = false;
     for (let iter = 0; iter < 2; iter++) {
       for (const b of this.boxes) {
+        if (b.gate?.opened) continue;
         if (this.resolveBox(b)) contact = true;
       }
     }
@@ -613,6 +790,84 @@ export class Game {
       if (!this.prevContact && vn < -BOUNCE_MIN) this.sfx.land();
     }
     this.prevContact = contact;
+  }
+
+  /** 区域逻辑：重力场 / 压力板 / 弹射板 / 检查信标 */
+  private updateZones() {
+    const p = this.ball.pos;
+
+    // 反重力场
+    let inField: FieldZone | null = null;
+    for (const f of this.fields) {
+      if (p.x > f.min.x && p.x < f.max.x && p.y > f.min.y && p.y < f.max.y && p.z > f.min.z && p.z < f.max.z) {
+        inField = f;
+        break;
+      }
+    }
+    if (inField !== this.curField) {
+      if (inField) {
+        // 入场：重力交由场接管（离开后恢复向下，可空中按键转向）
+        this.gBase.copy(inField.dir);
+        this.sfx.field();
+      } else if (this.curField) {
+        // 出场：重力恢复向下，镜头回正
+        this.gBase.set(0, -1, 0);
+        this.refitCamera();
+      }
+      this.curField = inField;
+    }
+
+    // 压力板（永久激活）
+    for (const pl of this.plates) {
+      if (!pl.active && p.distanceTo(pl.pos) < PLATE_DIST) {
+        pl.active = true;
+        this.activePlates++;
+        pl.mat.emissive.set('#ffb300');
+        pl.mat.emissiveIntensity = 0.95;
+        pl.mat.color.set('#6b5316');
+        this.sfx.plate();
+        this.openGates();
+      }
+    }
+
+    // 弹射板
+    for (const bp of this.bumpers) {
+      if (bp.cd > 0) bp.cd -= 1 / 60;
+      if (bp.cd <= 0 && p.distanceTo(bp.pos) < BUMPER_DIST) {
+        bp.cd = 0.4;
+        this.ball.vel.copy(bp.n).multiplyScalar(bp.power);
+        // 弹射瞬间重力归位向下，形成抛物线飞越（否则横向重力下球会直线飞出边界）
+        this.gBase.set(0, -1, 0);
+        this.refitCamera();
+        this.boostT = 0.9;
+        this.shake = Math.max(this.shake, 0.22);
+        this.sfx.bumper();
+      }
+    }
+
+    // 检查信标
+    for (const cp of this.checkpoints) {
+      if (!cp.active && p.distanceTo(cp.pos) < CHECKPOINT_DIST) {
+        cp.active = true;
+        cp.mat.emissive.set('#2dffa8');
+        cp.mat.emissiveIntensity = 1.1;
+        cp.mat.color.set('#0e4d33');
+        this.checkpoint = { pos: cp.pos.clone(), gBase: this.gBase.clone(), q: this.qTarget.clone() };
+        this.sfx.checkpoint();
+      }
+    }
+  }
+
+  private openGates() {
+    for (const b of this.boxes) {
+      const gate = b.gate;
+      if (gate && !gate.opened && this.activePlates >= gate.need) {
+        gate.opened = true;
+        this.sfx.gate();
+        const idx = this.solidMeshes.indexOf(gate.mesh);
+        if (idx >= 0) this.solidMeshes.splice(idx, 1);
+      }
+    }
   }
 
   private checkPickups() {
@@ -639,16 +894,20 @@ export class Game {
   private die() {
     if (this.dead || this.finished) return;
     this.dead = true;
+    this.deaths++;
     this.shake = 0.35;
     this.sfx.die();
     this.cb.onDeath();
     const g = ++this.gen;
     window.setTimeout(() => {
       if (g !== this.gen || this.mode !== 'play') return;
-      this.ball.pos.copy(this.spawn);
+      const cp = this.checkpoint;
+      this.ball.pos.copy(cp ? cp.pos : this.spawn);
       this.ball.vel.set(0, 0, 0);
-      this.gBase.set(0, -1, 0);
-      this.qTarget.identity();
+      this.gBase.copy(cp ? cp.gBase : V(0, -1, 0));
+      this.qTarget.copy(cp ? cp.q : new THREE.Quaternion());
+      this.curField = null;
+      this.boostT = 0;
       this.dead = false;
     }, 500);
   }
@@ -662,12 +921,12 @@ export class Game {
     const g = ++this.gen;
     window.setTimeout(() => {
       if (g !== this.gen) return;
-      this.cb.onWin({ rotations: this.rotations, time: this.time, stars: this.starsGot });
+      this.cb.onWin({ rotations: this.rotations, time: this.time, stars: this.starsGot, deaths: this.deaths });
     }, 800);
   }
 
   private pushStats() {
-    this.cb.onStats({ time: this.time, rotations: this.rotations, stars: this.starsGot, starsTotal: this.starsTotal });
+    this.cb.onStats({ time: this.time, rotations: this.rotations, stars: this.starsGot, starsTotal: this.starsTotal, deaths: this.deaths });
   }
 
   // ---------- 主循环 ----------
@@ -692,7 +951,10 @@ export class Game {
         this.acc -= STEP;
       }
     }
-    if (this.mode === 'play' && !this.dead && !this.finished) this.checkPickups();
+    if (this.mode === 'play' && !this.dead && !this.finished) {
+      this.updateZones();
+      this.checkPickups();
+    }
 
     // 球位置 + 滚动
     this.ballMesh.position.copy(this.ball.pos);
@@ -716,6 +978,27 @@ export class Game {
       s.mesh.position.y = s.baseY + Math.sin(t * 2 + s.phase) * 0.12;
     }
     this.matHazard.emissiveIntensity = 0.75 + 0.3 * Math.sin(t * 3.2);
+    this.matField.opacity = 0.07 + 0.04 * (0.5 + 0.5 * Math.sin(t * 1.7));
+    this.matBumper.emissiveIntensity = 0.75 + 0.35 * (0.5 + 0.5 * Math.sin(t * 4.2));
+    // 闸门溶解动画
+    for (const b of this.boxes) {
+      const gate = b.gate;
+      if (gate && gate.opened && gate.animT < 1) {
+        gate.animT = Math.min(1, gate.animT + dt * 2);
+        const k = gate.animT;
+        const ud = gate.mesh.userData;
+        if (ud.bx === undefined) {
+          ud.bx = gate.mesh.scale.x;
+          ud.by = gate.mesh.scale.y;
+          ud.bz = gate.mesh.scale.z;
+        }
+        const shrink = Math.max(0.02, 1 - k);
+        gate.mesh.scale.set(ud.bx * shrink, ud.by * shrink, ud.bz * shrink);
+        const m = gate.mesh.material as THREE.MeshStandardMaterial;
+        m.opacity = 0.85 * (1 - k);
+        if (k >= 1) gate.mesh.visible = false;
+      }
+    }
     for (let i = this.tweens.length - 1; i >= 0; i--) {
       const tw = this.tweens[i];
       tw.t += dt;
