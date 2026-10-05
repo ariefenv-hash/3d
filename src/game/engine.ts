@@ -81,7 +81,9 @@ interface CheckpointFx {
 interface SavedCheckpoint {
   pos: THREE.Vector3;
   gBase: THREE.Vector3;
-  q: THREE.Quaternion;
+  qBase: THREE.Quaternion;
+  yawOff: number;
+  pitchOff: number;
 }
 interface StarFx {
   mesh: THREE.Mesh;
@@ -94,6 +96,15 @@ interface Tween {
   t: number;
   dur: number;
   kind: 'star' | 'win';
+}
+/** 每面墙独立淡化状态（穿墙透视） */
+interface FadeInfo {
+  mat: THREE.MeshStandardMaterial;
+  edgeMat: THREE.LineBasicMaterial | null;
+  base: number;
+  baseEdge: number;
+  cur: number;
+  occl: boolean;
 }
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -138,6 +149,10 @@ export class Game {
 
   private gBase = V(0, -1, 0);
   private gEff = V(0, -1, 0);
+  /** 由重力推导的基准姿态（up=-g）；玩家视角偏移叠加在其上 */
+  private qBase = new THREE.Quaternion();
+  private yawOff = 0;
+  private pitchOff = 0;
   private qTarget = new THREE.Quaternion();
   private camDist = CAM_DIST;
 
@@ -253,10 +268,17 @@ export class Game {
       }),
       tip: (d: TipDir) => this.tip(d),
       yaw: (d: number) => this.yaw(d),
-      /** 只读探针：当前相机姿态下四个方向键对应的世界向量 */
+      /** 只读探针：当前相机姿态下四个方向键对应的世界向量（与 tip 同源：视平面投影） */
       dirs: () => {
+        const up = this.gBase.clone().negate();
         const r = V(1, 0, 0).applyQuaternion(this.qTarget);
-        const f = V(0, 0, -1).applyQuaternion(this.qTarget);
+        r.addScaledVector(up, -r.dot(up));
+        if (r.lengthSq() < 1e-6) r.set(1, 0, 0);
+        r.normalize();
+        const f0 = V(0, 0, -1).applyQuaternion(this.qTarget);
+        const f = f0.addScaledVector(up, -f0.dot(up));
+        if (f.lengthSq() < 1e-6) f.copy(r).negate();
+        f.normalize();
         return {
           R: r.toArray(),
           L: r.clone().negate().toArray(),
@@ -264,6 +286,17 @@ export class Game {
           D: f.clone().negate().toArray(),
         };
       },
+      /** 相机状态探针（yaw/pitch 偏移、距离、正在淡化的墙数） */
+      cam: () => ({
+        yaw: +this.yawOff.toFixed(3),
+        pitch: +this.pitchOff.toFixed(3),
+        dist: +this.camDist.toFixed(2),
+        faded: this.solidMeshes.filter((m) => {
+          const f = m.userData.fade as FadeInfo | undefined;
+          return !!f && f.cur < 0.9;
+        }).length,
+      }),
+      pitch: (a: number) => this.pitch(a),
       win: () => this.forceWin(),
       /** 测试用：直接进入指定关卡 */
       goto: (i: number) => this.startLevel(i),
@@ -338,13 +371,20 @@ export class Game {
     this.levelGroup = group;
 
     for (const b of lvl.boxes) {
-      const mesh = new THREE.Mesh(this.geoBox, b.hazard ? this.matHazard : this.matSolid);
-      mesh.position.set(b.p[0], b.p[1], b.p[2]);
-      mesh.scale.set(b.s[0], b.s[1], b.s[2]);
-      if (!b.hazard) {
-        mesh.add(new THREE.LineSegments(this.geoEdge, this.matEdge));
+      let mesh: THREE.Mesh;
+      if (b.hazard) {
+        mesh = new THREE.Mesh(this.geoBox, this.matHazard);
+      } else {
+        // 每面墙独立材质：穿墙透视需要逐墙淡化
+        const mat = this.matSolid.clone();
+        mesh = new THREE.Mesh(this.geoBox, mat);
+        const edgeMat = this.matEdge.clone();
+        mesh.add(new THREE.LineSegments(this.geoEdge, edgeMat));
+        mesh.userData.fade = { mat, edgeMat, base: 1, baseEdge: 0.4, cur: 1, occl: false } as FadeInfo;
         this.solidMeshes.push(mesh);
       }
+      mesh.position.set(b.p[0], b.p[1], b.p[2]);
+      mesh.scale.set(b.s[0], b.s[1], b.s[2]);
       group.add(mesh);
       this.boxes.push({
         min: V(b.p[0] - b.s[0] / 2, b.p[1] - b.s[1] / 2, b.p[2] - b.s[2] / 2),
@@ -388,10 +428,13 @@ export class Game {
     // 闸门
     if (lvl.gates) {
       for (const g of lvl.gates) {
-        const mesh = new THREE.Mesh(this.geoBox, this.matGate.clone());
+        const gmat = this.matGate.clone();
+        const gedge = new THREE.LineBasicMaterial({ color: '#c9b3ff', transparent: true, opacity: 0.8 });
+        const mesh = new THREE.Mesh(this.geoBox, gmat);
         mesh.position.set(g.p[0], g.p[1], g.p[2]);
         mesh.scale.set(g.s[0], g.s[1], g.s[2]);
-        mesh.add(new THREE.LineSegments(this.geoEdge, new THREE.LineBasicMaterial({ color: '#c9b3ff', transparent: true, opacity: 0.8 })));
+        mesh.add(new THREE.LineSegments(this.geoEdge, gedge));
+        mesh.userData.fade = { mat: gmat, edgeMat: gedge, base: 0.85, baseEdge: 0.8, cur: 1, occl: false } as FadeInfo;
         group.add(mesh);
         const gate: GateState = { need: g.need ?? 1, opened: false, animT: 0, mesh };
         this.solidMeshes.push(mesh);
@@ -480,7 +523,10 @@ export class Game {
     this.boostT = 0;
     this.prevContact = false;
     this.gBase.set(0, -1, 0);
-    this.qTarget.identity();
+    this.qBase.identity();
+    this.yawOff = 0;
+    this.pitchOff = 0;
+    this.composeQ();
     this.camDist = CAM_DIST;
     this.gyroSeen = false;
     this.gyroActive = this.gyroOn && this.gyroSeen;
@@ -498,7 +544,10 @@ export class Game {
     this.mode = 'attract';
     this.enabled = false;
     this.gBase.set(0, -1, 0);
-    this.qTarget.identity();
+    this.qBase.identity();
+    this.yawOff = 0;
+    this.pitchOff = 0;
+    this.composeQ();
   }
 
   setEnabled(b: boolean) {
@@ -507,8 +556,16 @@ export class Game {
 
   tip(d: TipDir) {
     if (this.mode !== 'play' || !this.enabled || this.finished || this.dead) return;
+    // 方向键 = 屏幕方位：把相机右向/前向投影到垂直于重力的平面（俯仰不影响映射）
+    const up = this.gBase.clone().negate();
     const R = V(1, 0, 0).applyQuaternion(this.qTarget);
-    const F = V(0, 0, -1).applyQuaternion(this.qTarget);
+    R.addScaledVector(up, -R.dot(up));
+    if (R.lengthSq() < 1e-6) R.set(1, 0, 0);
+    R.normalize();
+    const F0 = V(0, 0, -1).applyQuaternion(this.qTarget);
+    const F = F0.addScaledVector(up, -F0.dot(up));
+    if (F.lengthSq() < 1e-6) F.copy(R).negate(); // pitch 已限幅，理论不可达；兜底
+    F.normalize();
     let dir: THREE.Vector3;
     if (d === 'R') dir = R;
     else if (d === 'L') dir = R.negate();
@@ -525,17 +582,26 @@ export class Game {
     this.sfx.rotate();
   }
 
+  /** 90° 步进旋转（Q/E） */
   yaw(dir: number) {
     if (this.mode !== 'play' || !this.enabled || this.finished || this.dead) return;
-    const up = V(0, 1, 0).applyQuaternion(this.qTarget);
-    this.qTarget.premultiply(new THREE.Quaternion().setFromAxisAngle(up, dir * Math.PI * 0.5));
+    this.yawOff += dir * Math.PI * 0.5;
+    this.composeQ();
     this.sfx.rotate();
   }
 
+  /** 自由环视（拖拽水平分量） */
   freeYaw(angle: number) {
     if (this.mode !== 'play' || !this.enabled) return;
-    const up = V(0, 1, 0).applyQuaternion(this.qTarget);
-    this.qTarget.premultiply(new THREE.Quaternion().setFromAxisAngle(up, angle));
+    this.yawOff += angle;
+    this.composeQ();
+  }
+
+  /** 自由俯视/仰视（拖拽垂直分量），±72° 限幅避免万向节退化 */
+  pitch(a: number) {
+    if (this.mode !== 'play' || !this.enabled) return;
+    this.pitchOff = THREE.MathUtils.clamp(this.pitchOff + a, -1.25, 1.25);
+    this.composeQ();
   }
 
   enableGyro(on: boolean): boolean {
@@ -620,26 +686,47 @@ export class Game {
     }
   };
 
-  private dragging = false;
-  private lastPX = 0;
+  // 拖拽环视（鼠标+触屏）与双指捏合缩放；只有从 canvas 按下的指针才参与
+  private pts = new Map<number, { x: number; y: number }>();
+  private pinchD = 0;
   private pdHandler = (e: PointerEvent) => {
-    if (e.pointerType !== 'mouse' || this.mode !== 'play' || !this.enabled) return;
-    this.dragging = true;
-    this.lastPX = e.clientX;
+    if (this.mode !== 'play' || !this.enabled) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    this.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.pts.size === 2) {
+      const [a, b] = [...this.pts.values()];
+      this.pinchD = Math.hypot(a.x - b.x, a.y - b.y);
+    }
   };
   private pmHandler = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    const dx = e.clientX - this.lastPX;
-    this.lastPX = e.clientX;
-    if (Math.abs(dx) > 0) this.freeYaw(dx * 0.006);
+    const p = this.pts.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+    if (this.mode !== 'play' || !this.enabled) return;
+    if (this.pts.size === 1) {
+      // OrbitControls 惯例：上拖=升相机俯视，下拖=降相机仰视；左右拖=环视
+      if (dx !== 0) this.freeYaw(dx * 0.006);
+      if (dy !== 0) this.pitch(dy * 0.006);
+    } else if (this.pts.size === 2) {
+      const [a, b] = [...this.pts.values()];
+      const nd = Math.hypot(a.x - b.x, a.y - b.y);
+      if (this.pinchD > 0 && Math.abs(nd - this.pinchD) > 0.5) {
+        this.camDist = THREE.MathUtils.clamp(this.camDist + (this.pinchD - nd) * 0.03, 4, 16);
+        this.pinchD = nd;
+      }
+    }
   };
-  private puHandler = () => {
-    this.dragging = false;
+  private puHandler = (e: PointerEvent) => {
+    this.pts.delete(e.pointerId);
+    if (this.pts.size < 2) this.pinchD = 0;
   };
   private wheelHandler = (e: WheelEvent) => {
-    if (this.mode !== 'play') return;
+    if (this.mode !== 'play' || !this.enabled) return;
     e.preventDefault();
-    this.camDist = THREE.MathUtils.clamp(this.camDist + e.deltaY * 0.004, 5, 13);
+    this.camDist = THREE.MathUtils.clamp(this.camDist + e.deltaY * 0.004, 4, 16);
   };
   private resizeHandler = () => this.resize();
 
@@ -666,13 +753,21 @@ export class Game {
 
   // ---------- 相机 ----------
 
-  /** 依据 gBase 重建目标相机姿态（up=-g，前向最小摆动） */
+  /** 由 qBase + 玩家视角偏移合成目标姿态：qTarget = qYaw(up) · qBase · qPitch(local X) */
+  private composeQ() {
+    const up = V(0, 1, 0).applyQuaternion(this.qBase);
+    const qYaw = new THREE.Quaternion().setFromAxisAngle(up, this.yawOff);
+    const qPitch = new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), this.pitchOff);
+    this.qTarget.copy(qYaw).multiply(this.qBase).multiply(qPitch);
+  }
+
+  /** 重力变化后重建 qBase（up=-g，前向最小摆动）；玩家 yaw/pitch 偏移保留 */
   private refitCamera() {
     const up = this.gBase.clone().negate();
-    const f = V(0, 0, -1).applyQuaternion(this.qTarget);
+    const f = V(0, 0, -1).applyQuaternion(this.qBase);
     let proj = f.clone().addScaledVector(up, -f.dot(up));
     if (proj.lengthSq() < 0.0025) {
-      const r = V(1, 0, 0).applyQuaternion(this.qTarget);
+      const r = V(1, 0, 0).applyQuaternion(this.qBase);
       proj = r.clone().addScaledVector(up, -r.dot(up));
     }
     if (proj.lengthSq() < 0.0025) proj = V(1, 0, 0).addScaledVector(up, -up.x);
@@ -681,7 +776,8 @@ export class Game {
     const b = f2.clone().negate();
     const r2 = V().crossVectors(up, b).normalize();
     const m = new THREE.Matrix4().makeBasis(r2, up, b);
-    this.qTarget.setFromRotationMatrix(m);
+    this.qBase.setFromRotationMatrix(m);
+    this.composeQ();
   }
 
   private updateCamera(dt: number) {
@@ -694,12 +790,38 @@ export class Game {
     this.raycaster.far = len;
     const hits = this.raycaster.intersectObjects(this.solidMeshes, false);
     let d = len;
-    if (hits.length) d = Math.max(1.6, hits[0].distance - 0.4);
+    if (hits.length) d = Math.max(2.2, hits[0].distance - 0.6);
     this.cam.position.copy(this.ball.pos).addScaledVector(dirV, d);
+    // 穿墙透视：球与相机之间的墙（含收缩时贴脸的那面）淡化
+    const fadeCut = d + 0.6;
+    for (const h of hits) {
+      if (h.distance > fadeCut) break;
+      const f = (h.object as THREE.Mesh).userData.fade as FadeInfo | undefined;
+      if (f) f.occl = true;
+    }
+    this.updateFades(dt);
     if (this.shake > 0.001) {
       this.cam.position.x += (Math.random() - 0.5) * this.shake;
       this.cam.position.y += (Math.random() - 0.5) * this.shake;
       this.shake *= Math.exp(-5 * dt);
+    }
+  }
+
+  /** 每帧把每面墙的透明度向目标过渡：被遮挡 →0.14，无遮挡 →1 */
+  private updateFades(dt: number) {
+    for (const m of this.solidMeshes) {
+      const f = m.userData.fade as FadeInfo | undefined;
+      if (!f) continue;
+      const target = f.occl ? 0.14 : 1;
+      f.occl = false; // 下一次射线重新标记
+      const k = Math.min(1, (target === 1 ? 3.2 : 9) * dt); // 淡出快、恢复慢
+      f.cur += (target - f.cur) * k;
+      if (Math.abs(target - f.cur) < 0.005) f.cur = target;
+      const opaque = f.cur >= 0.999;
+      f.mat.transparent = !opaque;
+      f.mat.opacity = f.base * f.cur;
+      f.mat.depthWrite = f.cur > 0.85;
+      if (f.edgeMat) f.edgeMat.opacity = f.baseEdge * (0.35 + 0.65 * f.cur); // 幽灵墙：棱线保留轮廓
     }
   }
 
@@ -852,7 +974,7 @@ export class Game {
         cp.mat.emissive.set('#2dffa8');
         cp.mat.emissiveIntensity = 1.1;
         cp.mat.color.set('#0e4d33');
-        this.checkpoint = { pos: cp.pos.clone(), gBase: this.gBase.clone(), q: this.qTarget.clone() };
+        this.checkpoint = { pos: cp.pos.clone(), gBase: this.gBase.clone(), qBase: this.qBase.clone(), yawOff: this.yawOff, pitchOff: this.pitchOff };
         this.sfx.checkpoint();
       }
     }
@@ -905,7 +1027,16 @@ export class Game {
       this.ball.pos.copy(cp ? cp.pos : this.spawn);
       this.ball.vel.set(0, 0, 0);
       this.gBase.copy(cp ? cp.gBase : V(0, -1, 0));
-      this.qTarget.copy(cp ? cp.q : new THREE.Quaternion());
+      if (cp) {
+        this.qBase.copy(cp.qBase);
+        this.yawOff = cp.yawOff;
+        this.pitchOff = cp.pitchOff;
+      } else {
+        this.qBase.identity();
+        this.yawOff = 0;
+        this.pitchOff = 0;
+      }
+      this.composeQ();
       this.curField = null;
       this.boostT = 0;
       this.dead = false;
@@ -940,7 +1071,8 @@ export class Game {
 
     if (this.mode === 'play' && this.timerOn && !this.finished && !this.dead) this.time += dt;
     if (this.mode === 'attract') {
-      this.qTarget.multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), 0.1 * dt));
+      this.yawOff += 0.1 * dt;
+      this.composeQ();
     }
 
     this.computeG();
