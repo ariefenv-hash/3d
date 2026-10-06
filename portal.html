@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>几何贯穿 · 双重视界 — 2D / 3D 官方入口</title>
+<meta name="description" content="几何贯穿双版本官方传送门：2D 视界重力 · 3D 透视之眼，一键进入或复制链接。"/>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="15" y="15" width="34" height="34" transform="rotate(45 32 32)" fill="none" stroke="%2334d399" stroke-width="4"/><circle cx="32" cy="32" r="6" fill="%23a78bfa"/></svg>'/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg:#04060d;
+  --em:#34d399; --em-soft:rgba(52,211,153,.16);
+  --vi:#a78bfa; --vi-soft:rgba(167,139,250,.16);
+  --tx:#e2e8f0; --dim:#94a3b8; --mut:#64748b;
+  --line:rgba(148,163,184,.14);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg); color:var(--tx);
+  font-family:"Plus Jakarta Sans","Noto Sans SC",system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  min-height:100vh; overflow-x:hidden;
+  display:flex; align-items:center; justify-content:center;
+}
+/* ---------- 背景 ---------- */
+.bg{position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden}
+.aurora{position:absolute; width:640px; height:640px; border-radius:50%; filter:blur(120px)}
+.aurora.a2{top:-220px; left:-160px; background:var(--em); opacity:.13; animation:drift 17s ease-in-out infinite alternate}
+.aurora.a3{top:-220px; right:-160px; background:var(--vi); opacity:.15; animation:drift 21s ease-in-out infinite alternate-reverse}
+@keyframes drift{from{transform:translate(0,0) scale(1)} to{transform:translate(48px,36px) scale(1.08)}}
+.gridlines{position:absolute; inset:0;
+  background-image:linear-gradient(rgba(148,163,184,.055) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(148,163,184,.055) 1px,transparent 1px);
+  background-size:46px 46px;
+  -webkit-mask-image:radial-gradient(ellipse 92% 74% at 50% 0%,#000 28%,transparent 76%);
+          mask-image:radial-gradient(ellipse 92% 74% at 50% 0%,#000 28%,transparent 76%);
+}
+.vignette{position:absolute; inset:0;
+  background:radial-gradient(ellipse 120% 90% at 50% 110%,rgba(0,0,0,.55),transparent 55%)}
+/* ---------- 骨架 ---------- */
+.wrap{position:relative; z-index:2; width:min(1060px,100%); padding:76px 28px 52px; margin:0 auto}
+.hero{text-align:center; animation:rise .8s .04s cubic-bezier(.22,.9,.3,1) both}
+.eyebrow{
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px; letter-spacing:.36em; text-transform:uppercase; color:var(--mut);
+  display:flex; align-items:center; justify-content:center; gap:16px;
+}
+.eyebrow::before,.eyebrow::after{content:""; width:38px; height:1px; background:rgba(148,163,184,.28)}
+h1{
+  margin:20px 0 18px; font-weight:900; line-height:1.04; letter-spacing:.045em;
+  font-size:clamp(52px,9vw,94px);
+  background:linear-gradient(98deg,var(--em) 4%,#d9f7ea 38%,#e2e8f0 55%,#c9b8fd 78%,var(--vi) 98%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
+.sub{max-width:580px; margin:0 auto; color:var(--dim); font-size:15px; line-height:1.9}
+.sub b{color:var(--tx); font-weight:600}
+/* ---------- 卡片舞台 ---------- */
+.stage{position:relative; display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:52px}
+.card{
+  position:relative; overflow:hidden; border-radius:24px; padding:36px 34px 30px;
+  background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.018));
+  border:1px solid rgba(148,163,184,.13);
+  backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  display:flex; flex-direction:column;
+  transition:transform .35s cubic-bezier(.22,.9,.3,1),border-color .35s,box-shadow .35s;
+  animation:rise .8s cubic-bezier(.22,.9,.3,1) both;
+}
+.card.c2d{animation-delay:.16s}
+.card.c3d{animation-delay:.26s}
+.card.c2d:hover{transform:translateY(-5px); border-color:rgba(52,211,153,.42); box-shadow:0 24px 70px -18px rgba(52,211,153,.22)}
+.card.c3d:hover{transform:translateY(-5px); border-color:rgba(167,139,250,.46); box-shadow:0 24px 70px -18px rgba(167,139,250,.24)}
+.bar{width:42px; height:3px; border-radius:2px; margin-bottom:22px}
+.c2d .bar{background:linear-gradient(90deg,var(--em),rgba(52,211,153,0))}
+.c3d .bar{background:linear-gradient(90deg,var(--vi),rgba(167,139,250,0))}
+.badge{
+  display:inline-flex; align-self:flex-start; align-items:center; gap:7px;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px; letter-spacing:.22em; padding:6px 13px; border-radius:999px;
+}
+.c2d .badge{color:var(--em); background:var(--em-soft); border:1px solid rgba(52,211,153,.3)}
+.c3d .badge{color:var(--vi); background:var(--vi-soft); border:1px solid rgba(167,139,250,.32)}
+.badge i{width:5px; height:5px; border-radius:50%; background:currentColor; animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1} 50%{opacity:.3}}
+.card h2{margin-top:18px; font-size:34px; font-weight:900; letter-spacing:.06em}
+.latin{font-family:"Syne",sans-serif; font-weight:700; font-size:10px; letter-spacing:.34em; text-transform:uppercase; margin-top:7px}
+.c2d .latin{color:rgba(52,211,153,.6)}
+.c3d .latin{color:rgba(167,139,250,.66)}
+.desc{margin-top:14px; color:var(--dim); font-size:14px; line-height:1.85; min-height:78px}
+.chips{list-style:none; display:flex; flex-wrap:wrap; gap:8px; margin-top:18px}
+.chips li{font-size:12px; color:var(--dim); padding:6px 13px; border-radius:999px;
+  border:1px solid var(--line); background:rgba(255,255,255,.025); letter-spacing:.04em}
+.actions{display:flex; gap:10px; margin-top:auto; padding-top:26px}
+/* ---------- 按钮 ---------- */
+.btn{
+  flex:1; display:inline-flex; align-items:center; justify-content:center; gap:8px;
+  height:48px; border-radius:999px; font-size:14.5px; font-weight:700; letter-spacing:.05em;
+  text-decoration:none; cursor:pointer; user-select:none;
+  transition:transform .25s,box-shadow .25s,border-color .25s,color .25s,background .25s;
+}
+.btn svg{width:17px; height:17px; flex:none}
+.btn:active{transform:scale(.97)}
+.btn:focus-visible{outline:2px solid var(--em); outline-offset:3px}
+.c3d .btn:focus-visible{outline-color:var(--vi)}
+.primary{color:#04150c; background:linear-gradient(135deg,#4ade9f,#22c48a)}
+.c3d .primary{color:#130a26; background:linear-gradient(135deg,#b79dff,#8b6cf0)}
+.primary:hover{transform:translateY(-2px)}
+.c2d .primary:hover{box-shadow:0 12px 34px -8px rgba(52,211,153,.5)}
+.c3d .primary:hover{box-shadow:0 12px 34px -8px rgba(167,139,250,.52)}
+.ghost{color:var(--dim); background:transparent; border:1px solid rgba(148,163,184,.24)}
+.ghost:hover{color:var(--tx); border-color:rgba(148,163,184,.5)}
+.ghost .i-check{display:none}
+.ghost.copied .i-copy{display:none}
+.ghost.copied .i-check{display:block}
+.c2d .ghost.copied{color:var(--em); border-color:rgba(52,211,153,.55)}
+.c3d .ghost.copied{color:var(--vi); border-color:rgba(167,139,250,.6)}
+.url{
+  margin-top:16px; text-align:center;
+  font-family:"JetBrains Mono",ui-monospace,monospace;
+  font-size:11px; letter-spacing:.06em; color:var(--mut);
+}
+/* ---------- 卡片角标装置 ---------- */
+.deco{position:absolute; top:26px; right:26px; width:58px; height:58px; opacity:.55; pointer-events:none}
+.deco.d2d{perspective:none}
+.dia{
+  position:absolute; inset:8px; border:1.5px solid rgba(52,211,153,.55);
+  animation:diaSpin 22s linear infinite;
+}
+.dia::after{
+  content:""; position:absolute; top:50%; left:50%; width:8px; height:8px; margin:-4px 0 0 -4px;
+  border-radius:50%; background:#fbbf24; box-shadow:0 0 12px 2px rgba(251,191,36,.6);
+  animation:pulse 2.4s ease-in-out infinite;
+}
+@keyframes diaSpin{from{transform:rotate(45deg)} to{transform:rotate(405deg)}}
+.deco.d3d{perspective:300px}
+.cube{position:absolute; inset:2px; transform-style:preserve-3d; animation:cubeSpin 16s linear infinite}
+.cube i{position:absolute; inset:0; border:1.5px solid rgba(167,139,250,.55); background:rgba(167,139,250,.045)}
+.cube i:nth-child(1){transform:translateZ(27px)}
+.cube i:nth-child(2){transform:rotateY(180deg) translateZ(27px)}
+.cube i:nth-child(3){transform:rotateY(90deg) translateZ(27px)}
+.cube i:nth-child(4){transform:rotateY(-90deg) translateZ(27px)}
+.cube i:nth-child(5){transform:rotateX(90deg) translateZ(27px)}
+.cube i:nth-child(6){transform:rotateX(-90deg) translateZ(27px)}
+@keyframes cubeSpin{from{transform:rotateX(-24deg) rotateY(0deg)} to{transform:rotateX(-24deg) rotateY(360deg)}}
+/* ---------- 中央节点 ---------- */
+.junction{
+  position:absolute; z-index:3; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:46px; height:46px; border-radius:50%;
+  background:rgba(8,12,24,.9); border:1px solid rgba(148,163,184,.22);
+  backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 0 0 6px rgba(4,6,13,.65), 0 0 30px rgba(103,183,220,.14);
+  animation:rise .8s .4s cubic-bezier(.22,.9,.3,1) both;
+}
+.junction svg{width:15px; height:15px}
+/* ---------- 页脚 ---------- */
+.foot{
+  display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:14px;
+  margin-top:46px; color:#475569; font-size:12.5px; letter-spacing:.08em;
+  animation:rise .8s .42s cubic-bezier(.22,.9,.3,1) both;
+}
+.foot .dot{width:3px; height:3px; border-radius:50%; background:#27344b}
+@keyframes rise{from{opacity:0; transform:translateY(22px)} to{opacity:1; transform:translateY(0)}}
+/* ---------- 响应式 ---------- */
+@media (max-width:920px){
+  .wrap{padding:60px 20px 44px}
+  .eyebrow{font-size:10px; letter-spacing:.2em; gap:10px}
+  .eyebrow::before,.eyebrow::after{width:22px}
+  .url{font-size:10px; letter-spacing:.02em; line-height:1.7; word-break:break-all}
+  .stage{grid-template-columns:1fr; gap:20px; margin-top:42px}
+  .junction{display:none}
+  .actions{flex-direction:column; padding-top:22px}
+  .desc{min-height:0}
+  .card h2{font-size:29px}
+  .deco{width:48px; height:48px; top:22px; right:22px}
+  .cube i:nth-child(1){transform:translateZ(22px)}
+  .cube i:nth-child(2){transform:rotateY(180deg) translateZ(22px)}
+  .cube i:nth-child(3){transform:rotateY(90deg) translateZ(22px)}
+  .cube i:nth-child(4){transform:rotateY(-90deg) translateZ(22px)}
+  .cube i:nth-child(5){transform:rotateX(90deg) translateZ(22px)}
+  .cube i:nth-child(6){transform:rotateX(-90deg) translateZ(22px)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true">
+  <div class="aurora a2"></div>
+  <div class="aurora a3"></div>
+  <div class="gridlines"></div>
+  <div class="vignette"></div>
+</div>
+
+<main class="wrap">
+  <header class="hero">
+    <p class="eyebrow">Geometric Traverse · Portal</p>
+    <h1>双重视界</h1>
+    <p class="sub">同一宇宙，两种维度 —— <b>2D 平面重力解谜</b>与 <b>3D 引力回廊</b>，任选一侧坠入。六向重力、棱镜评级，进度本地保存。</p>
+  </header>
+
+  <div class="stage">
+    <div class="junction" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 2L22 12L12 22L2 12Z" stroke="url(#jg)" stroke-width="2" stroke-linejoin="round"/><defs><linearGradient id="jg" x1="2" y1="2" x2="22" y2="22"><stop stop-color="#34d399"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs></svg>
+    </div>
+
+    <!-- 2D -->
+    <section class="card c2d">
+      <div class="deco d2d" aria-hidden="true"><div class="dia"></div></div>
+      <span class="bar"></span>
+      <span class="badge"><i></i>2D · 原典版</span>
+      <h2>视界重力</h2>
+      <div class="latin">Horizon Gravity</div>
+      <p class="desc">六向重力翻转解谜：旋转世界，引导光球穿越激光、传送门与反重力井。17 关战役、13 种机关、每日挑战连胜，手感打磨至丝滑。</p>
+      <ul class="chips">
+        <li>17 关卡</li><li>13 机关</li><li>每日挑战</li><li>S·A·B 评级</li>
+      </ul>
+      <div class="actions">
+        <a class="btn primary" href="https://ariefenv-hash.github.io/geometric-traverse/" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+          进入 2D 视界
+        </a>
+        <button class="btn ghost" id="copy-d2" type="button" aria-label="复制 2D 游戏链接">
+          <svg class="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <span class="lbl">复制链接</span>
+        </button>
+      </div>
+      <div class="url">ariefenv-hash.github.io/geometric-traverse</div>
+    </section>
+
+    <!-- 3D -->
+    <section class="card c3d">
+      <div class="deco d3d" aria-hidden="true">
+        <div class="cube"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <span class="bar"></span>
+      <span class="badge"><i></i>3D · 新维度</span>
+      <h2>透视之眼</h2>
+      <div class="latin">Perspective Eye</div>
+      <p class="desc">坠入立体回廊：自由视角 360° 环视、穿墙透视不迷路，弹射板、反重力井与检查信标构成 16 关立体解谜，每日挑战连胜开擂，维度即玩法。</p>
+      <ul class="chips">
+        <li>16 关卡</li><li>7 机关</li><li>每日挑战</li><li>S·A·B 评级</li>
+      </ul>
+      <div class="actions">
+        <a class="btn primary" href="https://ariefenv-hash.github.io/3d/" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+          进入 3D 回廊
+        </a>
+        <button class="btn ghost" id="copy-d3" type="button" aria-label="复制 3D 游戏链接">
+          <svg class="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          <svg class="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+          <span class="lbl">复制链接</span>
+        </button>
+      </div>
+      <div class="url">ariefenv-hash.github.io/3d</div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <span>点开即玩 · 无需安装</span><span class="dot"></span>
+    <span>进度与评级本地保存</span><span class="dot"></span>
+    <span>建议桌面端体验</span>
+  </footer>
+</main>
+
+<script>
+(function(){
+  var LINKS={
+    d2:'https://ariefenv-hash.github.io/geometric-traverse/',
+    d3:'https://ariefenv-hash.github.io/3d/'
+  };
+  function fallbackCopy(text){
+    var ta=document.createElement('textarea');
+    ta.value=text; ta.setAttribute('readonly','');
+    ta.style.cssText='position:fixed;top:-999px;left:-999px;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    var ok=false; try{ok=document.execCommand('copy');}catch(e){}
+    document.body.removeChild(ta); return ok;
+  }
+  function flash(btn){
+    btn.classList.add('copied');
+    var s=btn.querySelector('.lbl'), old='复制链接';
+    s.textContent='已复制';
+    clearTimeout(btn.__t);
+    btn.__t=setTimeout(function(){ btn.classList.remove('copied'); s.textContent=old; },2000);
+  }
+  function bind(key){
+    var btn=document.getElementById('copy-'+key);
+    if(!btn) return;
+    btn.addEventListener('click',function(){
+      var url=LINKS[key];
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(url).then(function(){flash(btn);},function(){fallbackCopy(url);flash(btn);});
+      }else{
+        fallbackCopy(url); flash(btn);
+      }
+    });
+  }
+  bind('d2'); bind('d3');
+})();
+</script>
+</body>
+</html>
