@@ -49,6 +49,8 @@ export interface LevelDef {
     p: [number, number, number];
     /** 朝向法线（仅视觉） */
     n: [number, number, number];
+    /** 捕获半径（默认 1.5；悬挂入portal的关卡可调大以放宽窗口） */
+    r?: number;
   };
   boxes: BoxDef[];
   /** 恰好 3 颗星 */

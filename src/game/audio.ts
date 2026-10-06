@@ -67,6 +67,10 @@ export class Sfx {
   field() {
     this.tone(300, 0.3, 'sine', 0.07, 900);
   }
+  /** 场内推进脉冲：短促气流 */
+  thrust() {
+    this.tone(500, 0.06, 'sine', 0.05, 700);
+  }
   /** 压力板激活：双音确认 */
   plate() {
     this.tone(660, 0.09, 'triangle', 0.11);

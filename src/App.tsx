@@ -3,7 +3,7 @@ import { Game } from './game/engine';
 import type { Stats, TipDir, WinInfo } from './game/engine';
 import { LEVELS } from './game/levels';
 
-const SAVE_KEY = 'gt3d.progress.v1';
+const SAVE_KEY = 'gt3d.progress.v2';
 const MUTE_KEY = 'gt3d.muted.v1';
 
 interface Best { stars: number; rotations: number; time: number; deaths?: number }
@@ -52,7 +52,7 @@ export default function App() {
 
   const [screen, setScreen] = useState<'title' | 'playing'>('title');
   const [levelIdx, setLevelIdx] = useState(0);
-  const [stats, setStats] = useState<Stats>({ time: 0, rotations: 0, stars: 0, starsTotal: 3, deaths: 0 });
+  const [stats, setStats] = useState<Stats>({ time: 0, rotations: 0, stars: 0, starsTotal: 3, deaths: 0, gAngle: 90 });
   const [win, setWin] = useState<WinData | null>(null);
   const [progress, setProgress] = useState<Progress>(progressRef.current);
   const [paused, setPaused] = useState(false);
@@ -84,7 +84,10 @@ export default function App() {
     try {
       game = new Game(canvas, {
         onStats: setStats,
-        onDeath: () => setDeathKey((k) => k + 1),
+        onDeath: (reason) => {
+          setDeathKey((k) => k + 1);
+          showToast(reason === 'fall' ? '坠出边界 — 空格回正可防迷路，R 键立刻重试' : '撞上危险晶体 — 记住它的位置，R 键重试');
+        },
         onPauseRequest: () => setPaused((p) => !p),
         onWin: (w) => {
           const li = levelIdxRef.current;
@@ -229,6 +232,7 @@ export default function App() {
       <div className="pad pad-yaw">
         <button className="pad-btn" {...padRepeat(() => gameRef.current?.yaw(1))}>↺</button>
         <button className="pad-btn" {...padRepeat(() => gameRef.current?.yaw(-1))}>↻</button>
+        <button className="pad-btn pad-restore" onClick={() => gameRef.current?.restoreDown()} title="重力回正">回</button>
       </div>
     </div>
   );
@@ -243,7 +247,7 @@ export default function App() {
           <div className="title-badge">3D</div>
           <h1 className="title-main">几何贯穿</h1>
           <div className="title-sub">引力矩阵 · GRAVITY MATRIX</div>
-          <p className="title-desc">六向重力解谜：倾倒重力让球滚动、平飞、坠落；借助弹射板、反重力井、压力闸门与检查信标，抵达传送门。连按两次 ←/→ 可反转重力。</p>
+          <p className="title-desc">六向重力解谜：倾倒重力让球滚动、平飞、坠落；空格随时回正向下，地面罗盘永不迷路。借助弹射板、反重力井、压力闸门与检查信标，抵达传送门。连按两次 ←/→ 可反转重力。</p>
           <div className="title-actions">
             <button className="btn btn-primary" onClick={() => startLevel(Math.min(progress.unlocked, LEVELS.length) - 1)}>
               {progress.unlocked > 1 ? '继续游戏' : '开始游戏'}
@@ -268,6 +272,12 @@ export default function App() {
               </span>
             </div>
             <div className="hud-right">
+              <span className="grav-compass" title="地面罗盘：箭头指向世界地面在屏幕上的方位">
+                <svg viewBox="0 0 36 36" style={{ transform: `rotate(${stats.gAngle}deg)` }}>
+                  <circle cx="18" cy="18" r="16" className="gc-ring" />
+                  <path d="M 18 6 L 24 20 L 18 16.5 L 12 20 Z" className="gc-arrow" />
+                </svg>
+              </span>
               <span className="hud-stat">转向 {stats.rotations}</span>
               <span className="hud-stat">坠落 {stats.deaths}</span>
               <span className="hud-stat">{fmtTime(stats.time)}</span>
@@ -278,7 +288,7 @@ export default function App() {
             </div>
           </div>
           {hint && <div className="hint-banner" onClick={() => setHint('')}>{hint}</div>}
-          {!isTouch && <div className="key-hints">↑ ↓ ← → 倾倒重力 · Q/E 90°旋转 · 拖拽自由环视（可俯仰） · 滚轮缩放 · R 重开 · Esc 暂停</div>}
+          {!isTouch && <div className="key-hints">↑ ↓ ← → 倾倒重力 · 空格 回正向下 · Q/E 90°旋转 · 拖拽自由环视（可俯仰） · 滚轮缩放 · R 重开 · Esc 暂停</div>}
           {isTouch && TouchPads}
         </>
       )}
@@ -323,6 +333,8 @@ export default function App() {
                 <li>← / →：重力向屏幕左 / 右倾倒，球贴地滚动</li>
                 <li>↑：重力倒向屏幕深处；↓：倒向屏幕近处</li>
                 <li><b>连按两次 ←（或 →）：重力反转</b>，球飞向天花板；连按四次可完成「升空→行军→垂直下坠」</li>
+                <li><b>空格：重力瞬间回正世界向下</b> —— 倒悬迷路时的万能保险，随时可按</li>
+                <li>顶栏<b>地面罗盘</b>箭头始终指向世界地面在屏幕上的方位——镜头翻滚后一眼找到「下」在哪</li>
                 <li>Q / E：90° 旋转视角；<b>在画面上按住拖拽可自由环视</b>（上下拖动=俯视 / 仰视）；滚轮或双指捏合缩放</li>
                 <li><b>穿墙透视：</b>墙壁挡住小球与镜头时会自动变半透明，任何角度都不会丢失视野</li>
                 <li>R 重开；Esc 暂停</li>
@@ -330,11 +342,11 @@ export default function App() {
               <p><b>机关图鉴：</b></p>
               <ul>
                 <li><b>弹射板</b>（青色箭头圆盘）：触到即沿箭头方向强力弹射，可飞越断崖</li>
-                <li><b>反重力井</b>（青色半透明区）：场内重力强制变为场的方向，离开后恢复原状；方向键可在场内预设定脱离方向</li>
+                <li><b>反重力井</b>（青色半透明区）：场内重力强制变为场的方向；<b>方向键在场内是推进脉冲</b>，可微调航向与升力</li>
                 <li><b>压力板 + 闸门</b>（琥珀圆盘 / 紫色能量墙）：滚过压力板即永久点亮，集齐后闸门溶解</li>
                 <li><b>检查信标</b>（立环）：穿过即激活，此后坠落或触刺都会回到信标处（连重力姿态一起还原）</li>
               </ul>
-              <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下两键 = 90° 旋转视角；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>
+              <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下 ↺/↻ = 90° 旋转视角、回 = 重力回正；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>
               <p><b>陀螺仪（实验）：</b>点击顶栏「陀」开启权限后，倾斜手机即可在当前重力基础上连续偏转方向；竖屏横屏自动适配，重新开关可校准基准角。</p>
               <p><b>评价：</b>零死亡且至少 2 星 = 棱镜 S；死亡 ≤ 4 = A；通关 = B。转向数与最短用时单独保存为纪录，破纪录会在结算时庆祝。</p>
             </div>

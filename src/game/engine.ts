@@ -11,6 +11,8 @@ export interface Stats {
   stars: number;
   starsTotal: number;
   deaths: number;
+  /** 重力方向在屏幕上的角度（deg，0=指向屏幕右，顺时针）；HUD 罗盘用 */
+  gAngle: number;
 }
 export interface WinInfo {
   rotations: number;
@@ -19,10 +21,12 @@ export interface WinInfo {
   deaths: number;
 }
 
+export type DeathReason = 'fall' | 'hazard';
+
 export interface GameCallbacks {
   onStats: (s: Stats) => void;
   onWin: (w: WinInfo) => void;
-  onDeath: () => void;
+  onDeath: (reason: DeathReason) => void;
   onPauseRequest: () => void;
 }
 
@@ -129,6 +133,7 @@ export class Game {
   private solidMeshes: THREE.Mesh[] = [];
   private stars: StarFx[] = [];
   private portal: THREE.Group | null = null;
+  private portalR = WIN_DIST;
   private spawn = V();
   private boundMin = V();
   private boundMax = V();
@@ -267,6 +272,7 @@ export class Game {
         level: this.levelIdx,
       }),
       tip: (d: TipDir) => this.tip(d),
+      restore: () => this.restoreDown(),
       yaw: (d: number) => this.yaw(d),
       /** 只读探针：当前相机姿态下四个方向键对应的世界向量（与 tip 同源：视平面投影） */
       dirs: () => {
@@ -490,6 +496,7 @@ export class Game {
     portal.add(new THREE.Mesh(this.geoTorus, this.matTorus));
     portal.add(new THREE.Mesh(this.geoDisc, this.matDisc));
     portal.position.set(lvl.portal.p[0], lvl.portal.p[1], lvl.portal.p[2]);
+    this.portalR = lvl.portal.r ?? WIN_DIST;
     const n = V(...lvl.portal.n).normalize();
     portal.quaternion.setFromUnitVectors(V(0, 0, 1), n);
     group.add(portal);
@@ -572,11 +579,33 @@ export class Game {
     else if (d === 'U') dir = F;
     else dir = F.negate();
     if (this.curField) {
-      // 场内重力被场接管，方向键暂不改变重力（仍计入转向数）
-    } else {
-      this.gBase.copy(dir);
-      this.refitCamera();
+      // 场内重力被场接管：方向键 = 沿场平面推进脉冲（可操控升力/航向，兼防贴边悬停软锁）
+      const d2 = dir.addScaledVector(this.curField.dir, -dir.dot(this.curField.dir));
+      if (d2.lengthSq() > 0.5) {
+        const now = performance.now();
+        if (now - this.lastThrustT > 140) {
+          this.lastThrustT = now;
+          this.ball.vel.addScaledVector(d2.normalize(), 3.4);
+          this.sfx.thrust();
+        }
+      }
+      if (!this.timerOn) this.timerOn = true;
+      return; // 推进不计转向
     }
+    this.gBase.copy(dir);
+    this.refitCamera();
+    this.rotations++;
+    if (!this.timerOn) this.timerOn = true;
+    this.sfx.rotate();
+  }
+
+  /** 空格：重力回正世界向下（万向保险——迷路/倒悬时一键落回地面） */
+  restoreDown() {
+    if (this.mode !== 'play' || !this.enabled || this.finished || this.dead) return;
+    if (this.curField) return;
+    if (this.gBase.x === 0 && this.gBase.y === -1 && this.gBase.z === 0) return;
+    this.gBase.set(0, -1, 0);
+    this.refitCamera();
     this.rotations++;
     if (!this.timerOn) this.timerOn = true;
     this.sfx.rotate();
@@ -624,6 +653,8 @@ export class Game {
   gyroIsActive(): boolean {
     return this.gyroActive;
   }
+
+  private lastThrustT = 0;
 
   private onDeviceOrientation(e: DeviceOrientationEvent) {
     if (e.beta == null || e.gamma == null) return;
@@ -682,6 +713,7 @@ export class Game {
       case 'q': case 'Q': case 'a': case 'A': this.yaw(1); break;
       case 'e': case 'E': case 'd': case 'D': this.yaw(-1); break;
       case 'r': case 'R': this.restart(); break;
+      case ' ': case 'Spacebar': e.preventDefault(); if (!e.repeat) this.restoreDown(); break;
       case 'Escape': case 'p': case 'P': this.cb.onPauseRequest(); break;
     }
   };
@@ -761,11 +793,18 @@ export class Game {
     this.qTarget.copy(qYaw).multiply(this.qBase).multiply(qPitch);
   }
 
-  /** 重力变化后重建 qBase（up=-g，前向最小摆动）；玩家 yaw/pitch 偏移保留 */
+  /** 重力变化后重建 qBase（up=-g，前向最小摆动）；玩家 yaw/pitch 偏移保留。
+   *  退化兜底顺序：旧前向 → 旧上向（保持翻滚面不变，按键语义稳定）→ 旧右向。 */
   private refitCamera() {
     const up = this.gBase.clone().negate();
     const f = V(0, 0, -1).applyQuaternion(this.qBase);
+    const upOld = V(0, 1, 0).applyQuaternion(this.qBase);
     let proj = f.clone().addScaledVector(up, -f.dot(up));
+    if (proj.lengthSq() < 0.0025) {
+      // 旧前向与新 up 平行（经过屏幕轴向翻滚）：改用旧上向投影，相机绕屏幕右轴俯仰翻过，
+      // 翻滚面保持不变 —— 同方向键的世界含义保持可学习的一致性（v1.3.0 修复按键漂移）
+      proj = upOld.clone().addScaledVector(up, -upOld.dot(up));
+    }
     if (proj.lengthSq() < 0.0025) {
       const r = V(1, 0, 0).applyQuaternion(this.qBase);
       proj = r.clone().addScaledVector(up, -r.dot(up));
@@ -849,7 +888,7 @@ export class Game {
     const dx = pos.x - cx, dy = pos.y - cy, dz = pos.z - cz;
     const d2 = dx * dx + dy * dy + dz * dz;
     if (b.hazard) {
-      if (d2 < BALL_R * BALL_R * 0.81) this.die();
+      if (d2 < BALL_R * BALL_R * 0.81) this.die('hazard');
       return false;
     }
     if (d2 >= BALL_R * BALL_R) return false;
@@ -999,7 +1038,7 @@ export class Game {
       p.y < this.boundMin.y - OOB_MARGIN || p.y > this.boundMax.y + OOB_MARGIN ||
       p.z < this.boundMin.z - OOB_MARGIN || p.z > this.boundMax.z + OOB_MARGIN
     ) {
-      this.die();
+      this.die('fall');
       return;
     }
     for (const s of this.stars) {
@@ -1010,16 +1049,16 @@ export class Game {
         this.tweens.push({ obj: s.mesh, t: 0, dur: 0.45, kind: 'star' });
       }
     }
-    if (this.portal && this.portal.position.distanceTo(p) < WIN_DIST) this.win();
+    if (this.portal && this.portal.position.distanceTo(p) < this.portalR) this.win();
   }
 
-  private die() {
+  private die(reason: DeathReason) {
     if (this.dead || this.finished) return;
     this.dead = true;
     this.deaths++;
     this.shake = 0.35;
     this.sfx.die();
-    this.cb.onDeath();
+    this.cb.onDeath(reason);
     const g = ++this.gen;
     window.setTimeout(() => {
       if (g !== this.gen || this.mode !== 'play') return;
@@ -1040,7 +1079,7 @@ export class Game {
       this.curField = null;
       this.boostT = 0;
       this.dead = false;
-    }, 500);
+    }, 320);
   }
 
   private win() {
@@ -1057,7 +1096,12 @@ export class Game {
   }
 
   private pushStats() {
-    this.cb.onStats({ time: this.time, rotations: this.rotations, stars: this.starsGot, starsTotal: this.starsTotal, deaths: this.deaths });
+    // 地面罗盘：显示"世界地面方向"在当前屏幕上的方位（0=箭头朝上、90=朝右、180=朝下）。
+    // 相机随重力翻滚后，玩家一眼就能看出哪边是地面 —— 迷路时的空间锚点
+    const inv = this.cam.quaternion.clone().invert();
+    const gl = V(0, -1, 0).applyQuaternion(inv);
+    const ang = Math.round((Math.atan2(gl.x, gl.y) * 180) / Math.PI);
+    this.cb.onStats({ time: this.time, rotations: this.rotations, stars: this.starsGot, starsTotal: this.starsTotal, deaths: this.deaths, gAngle: ang });
   }
 
   // ---------- 主循环 ----------
