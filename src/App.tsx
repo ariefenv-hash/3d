@@ -2,9 +2,25 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Game } from './game/engine';
 import type { Stats, TipDir, WinInfo } from './game/engine';
 import { LEVELS } from './game/levels';
+import { buildShareText, loadDailyState, pickDailyLevels, registerDailyComplete, todayKey } from './game/daily';
+import type { DailyRating, DailyState } from './game/daily';
 
 const SAVE_KEY = 'gt3d.progress.v2';
 const MUTE_KEY = 'gt3d.muted.v1';
+
+/** 每日挑战运行态：三关队列 + 当前进度 + 已获评级（内存态，完成/退出即释放） */
+interface DailyRun { dateKey: string; levels: number[]; pos: number; ratings: DailyRating[] }
+
+function fallbackCopy(text: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:-999px;left:-999px;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch { /* ignore */ }
+  document.body.removeChild(ta);
+}
 
 interface Best { stars: number; rotations: number; time: number; deaths?: number }
 interface Progress { unlocked: number; best: Record<number, Best> }
@@ -41,6 +57,8 @@ interface WinData extends WinInfo {
   rating: 'S' | 'A' | 'B';
   newRecord: boolean;
   level: number;
+  /** 每日挑战运行中：当前是第几关（0 起）——结算按钮切每日语义 */
+  dailyPos?: number;
 }
 
 export default function App() {
@@ -64,6 +82,17 @@ export default function App() {
   const [muted, setMuted] = useState(() => localStorage.getItem(MUTE_KEY) === '1');
   const [gyroOn, setGyroOn] = useState(false);
   const [webglFailed, setWebglFailed] = useState(false);
+  const [dailyRun, setDailyRunRaw] = useState<DailyRun | null>(null);
+  const dailyRunRef = useRef<DailyRun | null>(null);
+  const [dailyOpen, setDailyOpen] = useState(false);
+  const [dailyReport, setDailyReport] = useState<{ dateKey: string; ratings: DailyRating[]; streak: number } | null>(null);
+  const [dailySave, setDailySave] = useState<DailyState>(() => loadDailyState());
+
+  /** ref 与 state 同步更新：onWin 闭包只认 ref，UI 渲染读 state */
+  const applyDaily = useCallback((r: DailyRun | null) => {
+    dailyRunRef.current = r;
+    setDailyRunRaw(r);
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -90,6 +119,18 @@ export default function App() {
         },
         onPauseRequest: () => setPaused((p) => !p),
         onWin: (w) => {
+          // 每日挑战运行中：不写战役存档（unlocked/best 冻结），评级记入每日战绩后进下一关
+          const dr = dailyRunRef.current;
+          if (dr) {
+            const rating = ratingOf(w.deaths, w.stars);
+            const ratings = dr.ratings.slice(0, dr.pos);
+            ratings.push(rating);
+            const next: DailyRun = { ...dr, ratings };
+            dailyRunRef.current = next;
+            setDailyRunRaw(next);
+            setWin({ ...w, rating, newRecord: false, level: dr.levels[dr.pos], dailyPos: dr.pos });
+            return;
+          }
           const li = levelIdxRef.current;
           const prev = progressRef.current;
           const prevBest = prev.best[li];
@@ -138,6 +179,7 @@ export default function App() {
   const startLevel = useCallback((i: number) => {
     const g = gameRef.current;
     if (!g) return;
+    applyDaily(null); // 进入战役关卡即退出每日运行
     levelIdxRef.current = i;
     setLevelIdx(i);
     setWin(null);
@@ -146,7 +188,72 @@ export default function App() {
     setScreen('playing');
     g.startLevel(i);
     showHint(LEVELS[i].hint);
+  }, [showHint, applyDaily]);
+
+  // ---------------- 每日挑战 ----------------
+
+  /** 进入每日队列的某一关（不走 startLevel，避免清掉每日运行态） */
+  const beginDailyPos = useCallback((run: DailyRun) => {
+    const g = gameRef.current;
+    if (!g) return;
+    const li = run.levels[run.pos];
+    levelIdxRef.current = li;
+    setLevelIdx(li);
+    setWin(null);
+    setPaused(false);
+    setSelectOpen(false);
+    setScreen('playing');
+    g.startLevel(li);
+    showHint(LEVELS[li].hint);
   }, [showHint]);
+
+  const startDailyRun = useCallback(() => {
+    const dateKey = todayKey();
+    const run: DailyRun = { dateKey, levels: pickDailyLevels(dateKey), pos: 0, ratings: [] };
+    applyDaily(run);
+    setDailyOpen(false);
+    setDailyReport(null);
+    beginDailyPos(run);
+  }, [applyDaily, beginDailyPos]);
+
+  /** 结算面板「下一关/完成挑战」：推进每日队列；末关完成则登记连胜并弹战报 */
+  const advanceDaily = useCallback(() => {
+    const run = dailyRunRef.current;
+    if (!run) return;
+    if (run.pos + 1 < run.levels.length) {
+      const next: DailyRun = { ...run, pos: run.pos + 1 };
+      applyDaily(next);
+      beginDailyPos(next);
+      return;
+    }
+    const st = registerDailyComplete(run.dateKey, run.ratings);
+    applyDaily(null);
+    setWin(null);
+    setDailySave(st);
+    setDailyReport({ dateKey: run.dateKey, ratings: run.ratings, streak: st.streak });
+    setScreen('title');
+    gameRef.current?.toAttract();
+  }, [applyDaily, beginDailyPos]);
+
+  /** 中途退出每日运行（已完成的各关评级不保留——当日从头再来） */
+  const exitDaily = useCallback(() => {
+    applyDaily(null);
+    setWin(null);
+    setPaused(false);
+    setSelectOpen(false);
+    setScreen('title');
+    gameRef.current?.toAttract();
+  }, [applyDaily]);
+
+  const copyDailyReport = useCallback(() => {
+    const rep = dailyReport;
+    if (!rep) return;
+    const text = buildShareText(rep.dateKey, rep.ratings, rep.streak);
+    const done = () => showToast('战报已复制，去分享吧');
+    const nav = navigator as Navigator & { clipboard?: { writeText?: (t: string) => Promise<void> } };
+    if (nav.clipboard?.writeText) nav.clipboard.writeText(text).then(done, () => { fallbackCopy(text); done(); });
+    else { fallbackCopy(text); done(); }
+  }, [dailyReport, showToast]);
 
   const restartLevel = useCallback(() => {
     gameRef.current?.restart();
@@ -198,12 +305,13 @@ export default function App() {
   const goTitle = useCallback(() => {
     const g = gameRef.current;
     if (!g) return;
+    applyDaily(null); // 回到标题 = 放弃当日运行
     setPaused(false);
     setWin(null);
     setSelectOpen(false);
     setScreen('title');
     g.toAttract();
-  }, []);
+  }, [applyDaily]);
 
   // ---------------- 子组件 ----------------
 
@@ -253,6 +361,9 @@ export default function App() {
               {progress.unlocked > 1 ? '继续游戏' : '开始游戏'}
             </button>
             <button className="btn" onClick={() => setSelectOpen(true)}>选择关卡</button>
+            <button className="btn btn-daily" onClick={() => { setDailySave(loadDailyState()); setDailyOpen(true); }}>
+              每日挑战{dailySave.streak > 0 ? ` · 连胜 ${dailySave.streak}` : ''}{dailySave.lastCompleted === todayKey() ? ' · 今日已完成' : ''}
+            </button>
             <button className="btn" onClick={() => setHelpOpen(true)}>玩法说明</button>
           </div>
           <div className="title-progress">已解锁 {progress.unlocked} / {LEVELS.length} 关</div>
@@ -287,10 +398,76 @@ export default function App() {
               <button className="icon-btn" onClick={() => setPaused(true)} title="暂停 (Esc)">‖</button>
             </div>
           </div>
+          {dailyRun && (
+            <div className="daily-banner">
+              <span className="db-label">每日</span>
+              <span className="db-dots">
+                {dailyRun.levels.map((li, i) => {
+                  const r = dailyRun.ratings[i];
+                  return <i key={i} className={'db-dot' + (r ? ' r-' + r : i === dailyRun.pos ? ' cur' : '')}>{r ?? (i === dailyRun.pos ? '▶' : '·')}</i>;
+                })}
+              </span>
+              <span className="db-pos">{dailyRun.pos + 1} / {dailyRun.levels.length}</span>
+              <button className="db-exit" onClick={exitDaily}>退出</button>
+            </div>
+          )}
           {hint && <div className="hint-banner" onClick={() => setHint('')}>{hint}</div>}
           {!isTouch && <div className="key-hints">↑ ↓ ← → 倾倒重力 · 空格 回正向下 · Q/E 90°旋转 · 拖拽自由环视（可俯仰） · 滚轮缩放 · R 重开 · Esc 暂停</div>}
           {isTouch && TouchPads}
         </>
+      )}
+
+      {dailyOpen && (
+        <div className="overlay modal-overlay" onClick={() => setDailyOpen(false)}>
+          <div className="modal daily-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">每日挑战</div>
+            <div className="daily-date">{todayKey()} · 三关连续挑战</div>
+            <div className="daily-stats">
+              <div><i>当前连胜</i><b>{dailySave.streak}</b></div>
+              <div><i>最佳连胜</i><b>{dailySave.bestStreak}</b></div>
+              <div><i>累计完成</i><b>{dailySave.totalCompletes}</b></div>
+            </div>
+            <div className="daily-levels">
+              {pickDailyLevels(todayKey()).map((li, i) => {
+                const r = dailySave.history[todayKey()]?.[i];
+                return (
+                  <div key={li} className="daily-level-row">
+                    <span className="dl-idx">{i + 1}</span>
+                    <span className="dl-name">第 {li + 1} 关 · {LEVELS[li].name}</span>
+                    <span className={'dl-rating' + (r ? ' got r-' + r : '')}>{r ?? '待挑战'}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="daily-note">每日 0 点刷新 · 全设备同一关卡 · 战役进度不受影响</div>
+            <div className="modal-actions">
+              <button className="btn btn-primary" onClick={startDailyRun}>
+                {dailySave.lastCompleted === todayKey() ? '再刷一遍' : '开始挑战'}
+              </button>
+              <button className="btn" onClick={() => setDailyOpen(false)}>返回</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dailyReport && (
+        <div className="overlay modal-overlay">
+          {Array.from({ length: 18 }).map((_, i) => (
+            <i key={i} className={'confetti c' + (i % 6)} style={{ left: `${(i * 37) % 100}%`, animationDelay: `${(i % 9) * 0.12}s` }} />
+          ))}
+          <div className="modal win-modal daily-report-modal">
+            <div className="modal-title">每日挑战完成</div>
+            <div className="report-chips">
+              {dailyReport.ratings.map((r, i) => <span key={i} className={'report-chip r-' + r}>{r}</span>)}
+            </div>
+            <div className="report-streak">连胜 {dailyReport.streak} 天{dailyReport.streak >= 3 ? ' · 势不可挡' : ''}</div>
+            <div className="report-note">战报已生成——复制后发给好友，对照同一组关卡与评级</div>
+            <div className="modal-actions">
+              <button className="btn" onClick={copyDailyReport}>复制战报</button>
+              <button className="btn btn-primary" onClick={() => setDailyReport(null)}>收下</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {selectOpen && (
@@ -352,6 +529,7 @@ export default function App() {
               <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下 ↺/↻ = 90° 旋转视角、回 = 重力回正；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>
               <p><b>陀螺仪（实验）：</b>点击顶栏「陀」开启权限后，倾斜手机即可在当前重力基础上连续偏转方向；竖屏横屏自动适配，重新开关可校准基准角。</p>
               <p><b>评价：</b>零死亡且至少 2 星 = 棱镜 S；死亡 ≤ 4 = A；通关 = B。转向数与最短用时单独保存为纪录，破纪录会在结算时庆祝。</p>
+              <p><b>每日挑战：</b>标题页入口——每天 0 点全设备刷新同一组 3 关，连续闯关累计连胜，完成后可复制 Wordle 式战报分享；挑战不影响战役进度与评级存档。</p>
             </div>
             <div className="modal-actions">
               <button className="btn btn-primary" onClick={() => setHelpOpen(false)}>明白了</button>
@@ -367,7 +545,7 @@ export default function App() {
             <div className="modal-actions column">
               <button className="btn btn-primary" onClick={() => setPaused(false)}>继续</button>
               <button className="btn" onClick={restartLevel}>重开本关</button>
-              <button className="btn" onClick={() => { setPaused(false); setSelectOpen(true); }}>选择关卡</button>
+              <button className="btn" onClick={() => { setPaused(false); applyDaily(null); setSelectOpen(true); }}>选择关卡</button>
               <button className="btn" onClick={goTitle}>回到标题</button>
             </div>
           </div>
@@ -382,7 +560,11 @@ export default function App() {
           <div className="modal win-modal">
             {win.newRecord && <div className="record-badge">新纪录！</div>}
             <div className={'rating rating-' + win.rating}>{win.rating}</div>
-            <div className="win-title">{win.level === LEVELS.length - 1 ? '全部通关！' : '关卡完成'}</div>
+            <div className="win-title">
+              {win.dailyPos != null
+                ? `每日挑战 ${win.dailyPos + 1} / ${dailyRun?.levels.length ?? 3}`
+                : win.level === LEVELS.length - 1 ? '全部通关！' : '关卡完成'}
+            </div>
             <div className="win-stars">
               {[0, 1, 2].map((i) => (
                 <span key={i} className={i < win.stars ? 'got' : ''}>★</span>
@@ -395,11 +577,22 @@ export default function App() {
             </div>
             <div className="win-tip">零死亡 + 2 星 = S · 坠落 ≤ 4 = A</div>
             <div className="modal-actions">
-              <button className="btn" onClick={() => startLevel(win.level)}>重玩</button>
-              {win.level < LEVELS.length - 1 ? (
-                <button className="btn btn-primary" onClick={() => startLevel(win.level + 1)}>下一关</button>
+              {win.dailyPos != null && dailyRun ? (
+                <>
+                  <button className="btn" onClick={() => beginDailyPos(dailyRun)}>重玩</button>
+                  <button className="btn btn-primary" onClick={advanceDaily}>
+                    {dailyRun.pos + 1 < dailyRun.levels.length ? '下一关' : '完成挑战'}
+                  </button>
+                </>
               ) : (
-                <button className="btn btn-primary" onClick={() => { setWin(null); setSelectOpen(true); }}>选关</button>
+                <>
+                  <button className="btn" onClick={() => startLevel(win.level)}>重玩</button>
+                  {win.level < LEVELS.length - 1 ? (
+                    <button className="btn btn-primary" onClick={() => startLevel(win.level + 1)}>下一关</button>
+                  ) : (
+                    <button className="btn btn-primary" onClick={() => { setWin(null); setSelectOpen(true); }}>选关</button>
+                  )}
+                </>
               )}
             </div>
           </div>

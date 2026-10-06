@@ -299,6 +299,8 @@ export class Game {
         deaths: this.deaths,
         plates: this.activePlates,
         finished: this.finished,
+        pos: this.ball.pos.toArray().map((v) => +v.toFixed(2)),
+        vel: this.ball.vel.toArray().map((v) => +v.toFixed(2)),
         dead: this.dead,
         level: this.levelIdx,
         gates: this.boxes.filter((b) => b.gate).map((b) => (b.gate!.opened ? 1 : 0)),
