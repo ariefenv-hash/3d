@@ -336,6 +336,8 @@ export class Game {
         }).length,
       }),
       pitch: (a: number) => this.pitch(a),
+      /** 重力罗盘读数探针：重力在相机系下的方向（sx 右/sy 上/sz 朝镜头）+ 场内标志 + 世界地面屏幕角 */
+      grav: () => this.gravReadout(),
       win: () => this.forceWin(),
       /** 测试用：直接进入指定关卡 */
       goto: (i: number) => this.startLevel(i),
@@ -706,6 +708,23 @@ export class Game {
     return { yaw: this.yawOff, pitch: this.pitchOff };
   }
 
+  /** 重力罗盘读数：当前实际重力（含陀螺仪偏转/反重力场）在相机坐标系下的方向。
+   *  sx=屏幕右为正、sy=屏幕上为正、sz=朝镜头为正；field=处于反重力场内；ground=世界地面(-Y)的屏幕方位角（0=朝上、90=朝右）。 */
+  gravReadout(): { sx: number; sy: number; sz: number; field: boolean; ground: number } {
+    const inv = this.cam.quaternion.clone().invert();
+    const dir = V().copy(this.gEff);
+    if (this.gEff.lengthSq() > 1e-9) dir.normalize();
+    const g = dir.applyQuaternion(inv);
+    const gl = V(0, -1, 0).applyQuaternion(inv);
+    return {
+      sx: +g.x.toFixed(3),
+      sy: +g.y.toFixed(3),
+      sz: +g.z.toFixed(3),
+      field: !!this.curField,
+      ground: Math.round((Math.atan2(gl.x, gl.y) * 180) / Math.PI),
+    };
+  }
+
   enableGyro(on: boolean): boolean {
     if (on) {
       if (typeof window.DeviceOrientationEvent === 'undefined') return false;
@@ -777,7 +796,14 @@ export class Game {
   // ---------- 输入 ----------
 
   private keyHandler = (e: KeyboardEvent) => {
-    if (this.mode !== 'play' || !this.enabled) return;
+    if (this.mode !== 'play') return;
+    // Esc / P：暂停⇄恢复开关。必须在 enabled 守卫之前处理——暂停态 enabled=false，
+    // 若被守卫拦截则键盘永远无法恢复（v1.7.0 修复：此前 Esc 是单向门）
+    if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+      this.cb.onPauseRequest();
+      return;
+    }
+    if (!this.enabled) return;
     switch (e.key) {
       case 'ArrowLeft': e.preventDefault(); this.tip('L'); break;
       case 'ArrowRight': e.preventDefault(); this.tip('R'); break;
@@ -787,7 +813,6 @@ export class Game {
       case 'e': case 'E': case 'd': case 'D': this.yaw(-1); break;
       case 'r': case 'R': this.restart(); break;
       case ' ': case 'Spacebar': e.preventDefault(); if (!e.repeat) this.restoreDown(); break;
-      case 'Escape': case 'p': case 'P': this.cb.onPauseRequest(); break;
     }
   };
 
