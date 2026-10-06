@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Game } from './game/engine';
 import type { Stats, TipDir, WinInfo } from './game/engine';
+import { YawDial } from './YawDial';
 import { LEVELS } from './game/levels';
 import { buildShareText, loadDailyState, pickDailyLevels, registerDailyComplete, todayKey } from './game/daily';
 import type { DailyRating, DailyState } from './game/daily';
@@ -412,8 +413,9 @@ export default function App() {
             </div>
           )}
           {hint && <div className="hint-banner" onClick={() => setHint('')}>{hint}</div>}
-          {!isTouch && <div className="key-hints">↑ ↓ ← → 倾倒重力 · 空格 回正向下 · Q/E 90°旋转 · 拖拽自由环视（可俯仰） · 滚轮缩放 · R 重开 · Esc 暂停</div>}
+          {!isTouch && <div className="key-hints">↑ ↓ ← → 倾倒重力 · 空格 回正向下 · Q/E 90°旋转 · 拖拽 / 右下转盘 平滑环视 · 滚轮缩放 · R 重开 · Esc 暂停</div>}
           {isTouch && TouchPads}
+          <YawDial gameRef={gameRef} isTouch={isTouch} />
         </>
       )}
 
@@ -512,7 +514,7 @@ export default function App() {
                 <li><b>连按两次 ←（或 →）：重力反转</b>，球飞向天花板；连按四次可完成「升空→行军→垂直下坠」</li>
                 <li><b>空格：重力瞬间回正世界向下</b> —— 倒悬迷路时的万能保险，随时可按</li>
                 <li>顶栏<b>地面罗盘</b>箭头始终指向世界地面在屏幕上的方位——镜头翻滚后一眼找到「下」在哪</li>
-                <li>Q / E：90° 旋转视角；<b>在画面上按住拖拽可自由环视</b>（上下拖动=俯视 / 仰视）；滚轮或双指捏合缩放</li>
+                <li>Q / E：90° 旋转视角；<b>在画面上按住拖拽可自由环视</b>（上下拖动=俯视 / 仰视）；<b>右下旋转转盘</b>实时显示旋转角度，按住拖动 / 滚轮可平滑环视微调；滚轮或双指捏合缩放</li>
                 <li><b>穿墙透视：</b>墙壁挡住小球与镜头时会自动变半透明，任何角度都不会丢失视野</li>
                 <li>R 重开；Esc 暂停</li>
               </ul>
@@ -526,7 +528,7 @@ export default function App() {
                 <li><b>引力转换球</b>（品红球+光环）：触碰即把当前重力 180° 反转——弹射板腾空后穿过它可被直送穹顶，迎面撞上它会被原路弹回</li>
                 <li><b>检查信标</b>（立环）：穿过即激活，此后坠落或触刺都会回到信标处（连重力姿态一起还原）</li>
               </ul>
-              <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下 ↺/↻ = 90° 旋转视角、回 = 重力回正；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>
+              <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下 ↺/↻ = 90° 旋转视角、回 = 重力回正；右下<b>旋转转盘</b>按住拖动可平滑环视；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>
               <p><b>陀螺仪（实验）：</b>点击顶栏「陀」开启权限后，倾斜手机即可在当前重力基础上连续偏转方向；竖屏横屏自动适配，重新开关可校准基准角。</p>
               <p><b>评价：</b>零死亡且至少 2 星 = 棱镜 S；死亡 ≤ 4 = A；通关 = B。转向数与最短用时单独保存为纪录，破纪录会在结算时庆祝。</p>
               <p><b>每日挑战：</b>标题页入口——每天 0 点全设备刷新同一组 3 关，连续闯关累计连胜，完成后可复制 Wordle 式战报分享；挑战不影响战役进度与评级存档。</p>

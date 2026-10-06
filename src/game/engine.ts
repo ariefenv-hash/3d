@@ -290,8 +290,6 @@ export class Game {
     // 调试 / 测试钩子
     (window as unknown as Record<string, unknown>).__gt3d = {
       state: () => ({
-        pos: this.ball.pos.toArray().map((v) => +v.toFixed(2)),
-        vel: +this.ball.vel.length().toFixed(2),
         g: this.gBase.toArray(),
         rot: this.rotations,
         mode: this.mode,
@@ -701,6 +699,11 @@ export class Game {
     if (this.mode !== 'play' || !this.enabled) return;
     this.pitchOff = THREE.MathUtils.clamp(this.pitchOff + a, -1.25, 1.25);
     this.composeQ();
+  }
+
+  /** 当前视角偏移读数（旋转转盘显示用；yaw=环视弧度，pitch=俯仰弧度） */
+  viewAngles(): { yaw: number; pitch: number } {
+    return { yaw: this.yawOff, pitch: this.pitchOff };
   }
 
   enableGyro(on: boolean): boolean {
