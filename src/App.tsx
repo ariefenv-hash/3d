@@ -247,7 +247,7 @@ export default function App() {
           <div className="title-badge">3D</div>
           <h1 className="title-main">几何贯穿</h1>
           <div className="title-sub">引力矩阵 · GRAVITY MATRIX</div>
-          <p className="title-desc">六向重力解谜：倾倒重力让球滚动、平飞、坠落；空格随时回正向下，地面罗盘永不迷路。借助弹射板、反重力井、压力闸门与检查信标，抵达传送门。连按两次 ←/→ 可反转重力。</p>
+          <p className="title-desc">六向重力解谜：倾倒重力让球滚动、平飞、坠落；空格随时回正向下，地面罗盘永不迷路。弹射板、反重力井、压力闸门、检查信标、时序闸门、悬浮平台、引力转换球——七种机关，十六关引力矩阵等你贯穿。连按两次 ←/→ 可反转重力。</p>
           <div className="title-actions">
             <button className="btn btn-primary" onClick={() => startLevel(Math.min(progress.unlocked, LEVELS.length) - 1)}>
               {progress.unlocked > 1 ? '继续游戏' : '开始游戏'}
@@ -344,6 +344,9 @@ export default function App() {
                 <li><b>弹射板</b>（青色箭头圆盘）：触到即沿箭头方向强力弹射，可飞越断崖</li>
                 <li><b>反重力井</b>（青色半透明区）：场内重力强制变为场的方向；<b>方向键在场内是推进脉冲</b>，可微调航向与升力</li>
                 <li><b>压力板 + 闸门</b>（琥珀圆盘 / 紫色能量墙）：滚过压力板即永久点亮，集齐后闸门溶解</li>
+                <li><b>时序闸门</b>（红紫⇌青色能量墙）：按周期自动开合，青色=通行、红光闪烁=即将关闭；球在门内时绝不会夹伤你</li>
+                <li><b>悬浮平台</b>（深色棱线平台）：沿轴线往复巡航，站上去会被载着走——看准它靠岸的时机</li>
+                <li><b>引力转换球</b>（品红球+光环）：触碰即把当前重力 180° 反转——弹射板腾空后穿过它可被直送穹顶，迎面撞上它会被原路弹回</li>
                 <li><b>检查信标</b>（立环）：穿过即激活，此后坠落或触刺都会回到信标处（连重力姿态一起还原）</li>
               </ul>
               <p><b>移动端：</b>左下方向垫 = 倾倒重力（可长按连发），右下 ↺/↻ = 90° 旋转视角、回 = 重力回正；在画面上<b>拖拽可自由环视（含俯仰）</b>，双指捏合缩放。</p>

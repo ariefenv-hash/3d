@@ -86,4 +86,17 @@ export class Sfx {
     this.tone(523, 0.1, 'sine', 0.1);
     this.tone(784, 0.16, 'sine', 0.1, undefined, 0.09);
   }
+  /** 引力转换球：反向滑音（升→降的反转感） */
+  orb() {
+    this.tone(700, 0.22, 'sine', 0.11, 240);
+    this.tone(350, 0.16, 'triangle', 0.08, 900, 0.06);
+  }
+  /** 时序闸门开启：轻快短音 */
+  gateOpen() {
+    this.tone(520, 0.08, 'sine', 0.07, 860);
+  }
+  /** 时序闸门关闭：低沉警示 */
+  gateShut() {
+    this.tone(200, 0.16, 'sawtooth', 0.08, 90);
+  }
 }

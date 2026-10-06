@@ -45,12 +45,16 @@ const STEP = 1 / 120;
 const PLATE_DIST = 1.15;
 const BUMPER_DIST = 1.05;
 const CHECKPOINT_DIST = 1.5;
+const ORB_DIST = 1.15;
+const ORB_CD = 1.2;
 
 interface GateState {
   need: number;
   opened: boolean;
   animT: number;
   mesh: THREE.Mesh;
+  /** 时序闸门：按周期自动开合（opened 随周期翻转；无溶解动画） */
+  timing?: { period: number; duty: number; phase: number };
 }
 interface PhysBox {
   min: THREE.Vector3;
@@ -58,6 +62,26 @@ interface PhysBox {
   hazard: boolean;
   mesh: THREE.Mesh;
   gate?: GateState;
+  move?: MoveState;
+  /** 球本子步是否与盒接触 / 上一子步是否接触（运动平台载球用） */
+  touchedCur?: boolean;
+  touchedPrev?: boolean;
+}
+/** 运动平台运行状态：沿轴正弦往复，每子步平移碰撞盒并携球同行 */
+interface MoveState {
+  base: THREE.Vector3;
+  axis: THREE.Vector3;
+  range: number;
+  period: number;
+  phase: number;
+  prev: THREE.Vector3;
+  delta: THREE.Vector3;
+}
+interface OrbFx {
+  pos: THREE.Vector3;
+  cd: number;
+  mesh: THREE.Mesh;
+  ring: THREE.Mesh;
 }
 interface FieldZone {
   min: THREE.Vector3;
@@ -142,11 +166,14 @@ export class Game {
   private plates: PlateFx[] = [];
   private bumpers: BumperFx[] = [];
   private checkpoints: CheckpointFx[] = [];
+  private orbs: OrbFx[] = [];
   private curField: FieldZone | null = null;
   private checkpoint: SavedCheckpoint | null = null;
   deaths = 0;
   private boostT = 0;
   private activePlates = 0;
+  /** 运动/时序机关共享的关卡时钟（仅在物理子步内推进） */
+  private moveT = 0;
 
   private ball = { pos: V(), vel: V() };
   private ballMesh!: THREE.Mesh;
@@ -191,6 +218,8 @@ export class Game {
   private geoRing = new THREE.TorusGeometry(0.55, 0.075, 10, 32);
   private geoCone = new THREE.ConeGeometry(0.3, 0.55, 16);
   private geoBump = new THREE.CylinderGeometry(0.62, 0.75, 0.2, 28);
+  private geoOrb = new THREE.SphereGeometry(0.3, 20, 16);
+  private geoOrbRing = new THREE.TorusGeometry(0.52, 0.045, 8, 32);
   private matSolid = new THREE.MeshStandardMaterial({ color: '#242c42', roughness: 0.85, metalness: 0.08 });
   private matHazard = new THREE.MeshStandardMaterial({ color: '#3a1220', emissive: '#ff2d55', emissiveIntensity: 0.9, roughness: 0.6 });
   private matEdge = new THREE.LineBasicMaterial({ color: '#3fc1ff', transparent: true, opacity: 0.4 });
@@ -204,6 +233,8 @@ export class Game {
   private matPlateOff = new THREE.MeshStandardMaterial({ color: '#4a5568', emissive: '#000000', emissiveIntensity: 0, roughness: 0.6 });
   private matBumper = new THREE.MeshStandardMaterial({ color: '#0e3a52', emissive: '#3fc1ff', emissiveIntensity: 0.9, roughness: 0.35 });
   private matCpOff = new THREE.MeshStandardMaterial({ color: '#4a5568', emissive: '#22303c', emissiveIntensity: 0.4, roughness: 0.5 });
+  private matOrb = new THREE.MeshStandardMaterial({ color: '#ff4dd2', emissive: '#ff2d9e', emissiveIntensity: 0.9, roughness: 0.3 });
+  private matOrbRing = new THREE.MeshBasicMaterial({ color: '#ffb3ec', transparent: true, opacity: 0.65 });
 
   // 陀螺仪
   private gyroOn = false;
@@ -270,6 +301,8 @@ export class Game {
         finished: this.finished,
         dead: this.dead,
         level: this.levelIdx,
+        gates: this.boxes.filter((b) => b.gate).map((b) => (b.gate!.opened ? 1 : 0)),
+        movers: this.boxes.filter((b) => b.move).map((b) => b.mesh.position.toArray().map((v) => +v.toFixed(2))),
       }),
       tip: (d: TipDir) => this.tip(d),
       restore: () => this.restoreDown(),
@@ -361,12 +394,13 @@ export class Game {
     this.plates = [];
     this.bumpers = [];
     this.checkpoints = [];
+    this.orbs = [];
     this.curField = null;
   }
 
   private isShared(mat: THREE.Material | THREE.Material[]): boolean {
     const m = Array.isArray(mat) ? mat[0] : mat;
-    return m === this.matSolid || m === this.matHazard || m === this.matTorus || m === this.matDisc || m === this.matField || m === this.matBumper || m === this.matPlateOff || m === this.matCpOff;
+    return m === this.matSolid || m === this.matHazard || m === this.matTorus || m === this.matDisc || m === this.matField || m === this.matBumper || m === this.matPlateOff || m === this.matCpOff || m === this.matOrb || m === this.matOrbRing;
   }
 
   private buildLevel(i: number) {
@@ -389,15 +423,23 @@ export class Game {
         mesh.userData.fade = { mat, edgeMat, base: 1, baseEdge: 0.4, cur: 1, occl: false } as FadeInfo;
         this.solidMeshes.push(mesh);
       }
+      const min = V(b.p[0] - b.s[0] / 2, b.p[1] - b.s[1] / 2, b.p[2] - b.s[2] / 2);
+      const max = V(b.p[0] + b.s[0] / 2, b.p[1] + b.s[1] / 2, b.p[2] + b.s[2] / 2);
       mesh.position.set(b.p[0], b.p[1], b.p[2]);
       mesh.scale.set(b.s[0], b.s[1], b.s[2]);
       group.add(mesh);
-      this.boxes.push({
-        min: V(b.p[0] - b.s[0] / 2, b.p[1] - b.s[1] / 2, b.p[2] - b.s[2] / 2),
-        max: V(b.p[0] + b.s[0] / 2, b.p[1] + b.s[1] / 2, b.p[2] + b.s[2] / 2),
-        hazard: !!b.hazard,
-        mesh,
-      });
+      const pb: PhysBox = { min, max, hazard: !!b.hazard, mesh };
+      if (b.move) {
+        const axis = V(...b.move.axis).normalize();
+        // 初始位移与 moveT=0 对齐（phase 从 0 起）；prev 同步以免首帧出现假 delta
+        const off0 = Math.sin((b.move.phase ?? 0) * Math.PI * 2) * b.move.range;
+        const disp0 = axis.clone().multiplyScalar(off0);
+        min.add(disp0);
+        max.add(disp0);
+        mesh.position.copy(V(b.p[0], b.p[1], b.p[2])).add(disp0);
+        pb.move = { base: V(b.p[0], b.p[1], b.p[2]), axis, range: b.move.range, period: Math.max(0.5, b.move.period), phase: b.move.phase ?? 0, prev: disp0.clone(), delta: V() };
+      }
+      this.boxes.push(pb);
     }
 
     // 反重力场
@@ -431,7 +473,7 @@ export class Game {
       }
     }
 
-    // 闸门
+    // 闸门（压力板常开闂 与 时序自动闂）
     if (lvl.gates) {
       for (const g of lvl.gates) {
         const gmat = this.matGate.clone();
@@ -444,6 +486,19 @@ export class Game {
         group.add(mesh);
         const gate: GateState = { need: g.need ?? 1, opened: false, animT: 0, mesh };
         this.solidMeshes.push(mesh);
+        if (g.timing) {
+          gate.timing = { period: Math.max(1, g.timing.period), duty: THREE.MathUtils.clamp(g.timing.duty ?? 0.5, 0.1, 0.9), phase: g.timing.phase ?? 0 };
+          // 时序闸门以“周期相位”决定初始开合
+          const t0 = gate.timing.phase % 1;
+          gate.opened = t0 < gate.timing.duty;
+          if (gate.opened) {
+            gmat.opacity = 0.16;
+            gmat.emissive.set('#3fc1ff');
+            gmat.emissiveIntensity = 0.5;
+            const idx = this.solidMeshes.indexOf(mesh);
+            if (idx >= 0) this.solidMeshes.splice(idx, 1);
+          }
+        }
         this.boxes.push({
           min: V(g.p[0] - g.s[0] / 2, g.p[1] - g.s[1] / 2, g.p[2] - g.s[2] / 2),
           max: V(g.p[0] + g.s[0] / 2, g.p[1] + g.s[1] / 2, g.p[2] + g.s[2] / 2),
@@ -479,6 +534,19 @@ export class Game {
         mesh.rotation.y = Math.PI / 2;
         group.add(mesh);
         this.checkpoints.push({ pos: V(cp.p[0], cp.p[1], cp.p[2]), active: false, mat });
+      }
+    }
+
+    // 引力转换球
+    if (lvl.orbs) {
+      for (const o of lvl.orbs) {
+        const mesh = new THREE.Mesh(this.geoOrb, this.matOrb);
+        mesh.position.set(o.p[0], o.p[1], o.p[2]);
+        const ring = new THREE.Mesh(this.geoOrbRing, this.matOrbRing);
+        ring.rotation.x = Math.PI / 2.6;
+        mesh.add(ring);
+        group.add(mesh);
+        this.orbs.push({ pos: V(o.p[0], o.p[1], o.p[2]), cd: 0, mesh, ring });
       }
     }
 
@@ -923,6 +991,15 @@ export class Game {
   }
 
   private step(h: number) {
+    // 机关时钟与运动平台先行：载球、平移碰撞盒，然后才积分球体
+    this.moveT += h;
+    for (const b of this.boxes) {
+      b.touchedPrev = b.touchedCur;
+      b.touchedCur = false;
+    }
+    this.updateMovers();
+    this.updateTimingGates();
+
     const vel = this.ball.vel;
     vel.addScaledVector(this.gEff, h);
     if (this.boostT > 0) this.boostT -= h;
@@ -935,7 +1012,10 @@ export class Game {
     for (let iter = 0; iter < 2; iter++) {
       for (const b of this.boxes) {
         if (b.gate?.opened) continue;
-        if (this.resolveBox(b)) contact = true;
+        if (this.resolveBox(b)) {
+          contact = true;
+          b.touchedCur = true;
+        }
       }
     }
     if (contact) {
@@ -951,6 +1031,61 @@ export class Game {
       if (!this.prevContact && vn < -BOUNCE_MIN) this.sfx.land();
     }
     this.prevContact = contact;
+  }
+
+  /** 运动平台：正弦往复，携上一子步接触的球同行 */
+  private updateMovers() {
+    for (const b of this.boxes) {
+      const m = b.move;
+      if (!m) continue;
+      const off = Math.sin((this.moveT / m.period + m.phase) * Math.PI * 2) * m.range;
+      const disp = m.axis.clone().multiplyScalar(off);
+      m.delta.copy(disp).sub(m.prev);
+      m.prev.copy(disp);
+      if (b.touchedPrev) this.ball.pos.add(m.delta);
+      b.min.add(m.delta);
+      b.max.add(m.delta);
+      b.mesh.position.copy(m.base).add(disp);
+    }
+  }
+
+  /** 球心是否处在盒的膨胀体积内（时序闸门关闭前的安全检查，防夹挤） */
+  private ballInBox(b: PhysBox, margin: number): boolean {
+    const p = this.ball.pos;
+    const cx = THREE.MathUtils.clamp(p.x, b.min.x, b.max.x);
+    const cy = THREE.MathUtils.clamp(p.y, b.min.y, b.max.y);
+    const cz = THREE.MathUtils.clamp(p.z, b.min.z, b.max.z);
+    const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz;
+    const r = BALL_R + margin;
+    return dx * dx + dy * dy + dz * dz < r * r;
+  }
+
+  /** 时序闸门：按周期开合；球在门内时推迟关闭（永不夹球） */
+  private updateTimingGates() {
+    for (const b of this.boxes) {
+      const g = b.gate;
+      if (!g || !g.timing) continue;
+      const t = ((this.moveT / g.timing.period + g.timing.phase) % 1 + 1) % 1;
+      const open = t < g.timing.duty;
+      if (open === g.opened) continue;
+      if (!open && this.ballInBox(b, 0.15)) continue; // 推迟关闭，等球离开
+      g.opened = open;
+      const m = g.mesh.material as THREE.MeshStandardMaterial;
+      if (open) {
+        const idx = this.solidMeshes.indexOf(g.mesh);
+        if (idx >= 0) this.solidMeshes.splice(idx, 1);
+        m.opacity = 0.16;
+        m.emissive.set('#3fc1ff');
+        m.emissiveIntensity = 0.5;
+        this.sfx.gateOpen();
+      } else {
+        this.solidMeshes.push(g.mesh);
+        m.opacity = 0.85;
+        m.emissive.set('#ff3b6b');
+        m.emissiveIntensity = 0.85;
+        this.sfx.gateShut();
+      }
+    }
   }
 
   /** 区域逻辑：重力场 / 压力板 / 弹射板 / 检查信标 */
@@ -1015,6 +1150,20 @@ export class Game {
         cp.mat.color.set('#0e4d33');
         this.checkpoint = { pos: cp.pos.clone(), gBase: this.gBase.clone(), qBase: this.qBase.clone(), yawOff: this.yawOff, pitchOff: this.pitchOff };
         this.sfx.checkpoint();
+      }
+    }
+
+    // 引力转换球：触碰即 180° 反转当前重力，冷却防连触
+    for (const o of this.orbs) {
+      if (o.cd > 0) o.cd -= 1 / 60;
+      if (o.cd <= 0 && p.distanceTo(o.pos) < ORB_DIST) {
+        o.cd = ORB_CD;
+        this.gBase.negate();
+        this.refitCamera();
+        this.rotations++;
+        if (!this.timerOn) this.timerOn = true;
+        this.shake = Math.max(this.shake, 0.18);
+        this.sfx.orb();
       }
     }
   }
@@ -1156,10 +1305,18 @@ export class Game {
     this.matHazard.emissiveIntensity = 0.75 + 0.3 * Math.sin(t * 3.2);
     this.matField.opacity = 0.07 + 0.04 * (0.5 + 0.5 * Math.sin(t * 1.7));
     this.matBumper.emissiveIntensity = 0.75 + 0.35 * (0.5 + 0.5 * Math.sin(t * 4.2));
-    // 闸门溶解动画
+    // 引力转换球：自旋 + 呼吸（冷却时熄灭）
+    for (const o of this.orbs) {
+      o.mesh.rotation.y += dt * 1.3;
+      o.ring.rotation.z += dt * 2.2;
+      const hot = o.cd <= 0;
+      this.matOrb.emissiveIntensity = hot ? 0.7 + 0.4 * (0.5 + 0.5 * Math.sin(t * 5)) : 0.2;
+      this.matOrbRing.opacity = hot ? 0.5 + 0.3 * Math.sin(t * 5) : 0.15;
+    }
+    // 闸门溶解动画（时序闸门不走溶解，只变色）
     for (const b of this.boxes) {
       const gate = b.gate;
-      if (gate && gate.opened && gate.animT < 1) {
+      if (gate && !gate.timing && gate.opened && gate.animT < 1) {
         gate.animT = Math.min(1, gate.animT + dt * 2);
         const k = gate.animT;
         const ud = gate.mesh.userData;
@@ -1173,6 +1330,26 @@ export class Game {
         const m = gate.mesh.material as THREE.MeshStandardMaterial;
         m.opacity = 0.85 * (1 - k);
         if (k >= 1) gate.mesh.visible = false;
+      }
+    }
+    // 时序闸门即将关闭时红光预警（处于开启相位的后 30%）
+    for (const b of this.boxes) {
+      const g = b.gate;
+      if (!g || !g.timing) continue;
+      const tt = ((this.moveT / g.timing.period + g.timing.phase) % 1 + 1) % 1;
+      const m = g.mesh.material as THREE.MeshStandardMaterial;
+      if (g.opened) {
+        if (tt > g.timing.duty * 0.7) {
+          // 快关了：青→红闪烁
+          const blink = 0.5 + 0.5 * Math.sin(t * 14);
+          m.emissive.set(blink > 0.5 ? '#ff3b6b' : '#3fc1ff');
+          m.emissiveIntensity = 0.5 + blink * 0.5;
+          m.opacity = 0.16 + blink * 0.2;
+        }
+      } else {
+        // 关闭态：呼吸红紫
+        m.emissive.set('#ff3b6b');
+        m.emissiveIntensity = 0.7 + 0.25 * Math.sin(t * 3);
       }
     }
     for (let i = this.tweens.length - 1; i >= 0; i--) {
